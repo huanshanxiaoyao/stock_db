@@ -1,0 +1,162 @@
+# 量化数据平台配置文件示例
+# 复制此文件为 config.yaml 并修改相应配置
+
+# 数据库配置
+database:
+  # 数据库类型 (目前支持: duckdb)
+  type: "duckdb"
+  # 数据库文件路径
+  path: "data/stock_data.duckdb"
+  # 是否启用内存数据库 (仅用于测试)
+  memory_mode: false
+  # 连接池大小
+  pool_size: 5
+  # 查询超时时间 (秒)
+  query_timeout: 300
+
+# 数据源配置
+data_sources:
+  # 聚宽数据源
+  jqdata:
+    # 是否启用
+    enabled: true
+    # API配置
+    api_config:
+      # 请求间隔 (秒)
+      request_interval: 0.1
+      # 重试次数
+      max_retries: 3
+      # 超时时间 (秒)
+      timeout: 30
+      # 批量大小
+      batch_size: 100
+    # 交易所过滤配置 (2025年7月1日起聚宽不再维护北交所数据)
+    exchange_filter:
+      # 排除的交易所
+      exclude_exchanges: ["BSE"]  # 北交所
+      # 包含的交易所
+      include_exchanges: ["SZSE", "SSE"]  # 深交所、上交所
+
+  # Tushare数据源（用于北交所股票数据）
+  tushare:
+    enabled: true
+
+# 股票过滤配置
+stock_filter:
+  # 排除的股票代码后缀 (北交所股票)
+  exclude_suffixes: [".BJ"]
+  # 包含的股票代码后缀 (深交所、上交所)
+  include_suffixes: [".SZ", ".SH"]
+  # 是否启用严格过滤模式
+  strict_mode: true
+  # 过滤说明
+  filter_reason: "自2025年7月1日起，聚宽不再维护北交所数据"
+
+# 数据更新配置
+update:
+  # 默认更新数据类型
+  default_data_types:
+    - "financial"
+    - "market"
+  # 并发更新线程数
+  max_workers: 4
+  # 是否启用增量更新
+  incremental_update: true
+  # 数据保留天数 (0表示不删除)
+  data_retention_days: 0
+  # 默认历史起始日期（当未从数据库或股票信息中获得起点时使用）
+  default_history_start_date: "2019-01-01"
+
+
+# 数据分析配置
+analysis:
+  # 默认分析周期
+  default_periods:
+    financial: 8  # 财务数据分析周期 (季度)
+    market: 252   # 市场数据分析周期 (交易日)
+  # 评分权重
+  scoring_weights:
+    financial_health: 0.25
+    profitability: 0.25
+    growth: 0.20
+    valuation: 0.20
+    technical: 0.10
+  # 基准指标
+  benchmarks:
+    # 行业平均PE
+    industry_pe: 15.0
+    # 行业平均PB
+    industry_pb: 1.5
+    # 无风险利率
+    risk_free_rate: 0.03
+
+# 日志配置
+logging:
+  # 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  level: "INFO"
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  # 日志文件配置
+  file:
+    # 是否启用文件日志
+    enabled: true
+    # 日志文件路径
+    path: "logs/stock_data.log"
+    # 单个日志文件最大大小 (MB)
+    max_size: 10
+    # 保留的日志文件数量
+    backup_count: 5
+  # 控制台日志
+  console:
+    # 是否启用控制台日志
+    enabled: true
+    # 控制台日志级别
+    level: "INFO"
+
+# 缓存配置
+cache:
+  # 是否启用缓存
+  enabled: true
+  # 缓存类型 (memory, redis)
+  type: "memory"
+  # 缓存过期时间 (秒)
+  ttl: 3600
+  # 最大缓存大小
+  max_size: 1000
+  # Redis配置 (当type为redis时)
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: null
+
+# 性能配置
+performance:
+  # 查询结果缓存大小
+  query_cache_size: 100
+  # 数据预加载
+  preload_data: false
+  # 并行查询
+  parallel_queries: true
+  # 内存使用限制 (MB)
+  memory_limit: 2048
+
+# 安全配置
+security:
+  # API密钥加密
+  encrypt_credentials: true
+  # 数据库连接加密
+  encrypt_database: false
+  # 访问日志
+  access_logging: true
+
+# 开发配置
+development:
+  # 是否为开发模式
+  debug_mode: false
+  # 是否启用性能分析
+  profiling: false
+  # 测试数据库路径
+  test_database: "test_stock_data.db"
+  # 是否使用模拟数据
+  mock_data: false
