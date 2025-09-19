@@ -8,12 +8,57 @@ from pathlib import Path
 import logging
 from dataclasses import dataclass, field
 
+# 获取项目根目录的绝对路径
+PROJECT_ROOT = Path(__file__).parent.resolve()
+
+# 默认数据根目录
+DEFAULT_DATA_ROOT = Path("D:/Data/stock_db")
+
+def get_data_root() -> Path:
+    """获取数据根目录
+    
+    优先级：
+    1. 环境变量 STOCK_DATA_ROOT
+    2. 配置文件中的设置
+    3. 默认路径 D:/Data/stock_db
+    """
+    # 从环境变量获取
+    env_path = os.getenv("STOCK_DATA_ROOT")
+    if env_path:
+        return Path(env_path).resolve()
+    
+    # 使用默认路径
+    return DEFAULT_DATA_ROOT
+
+def resolve_data_path(relative_path: str) -> str:
+    """解析数据相关路径，基于数据根目录
+    
+    Args:
+        relative_path: 相对于数据根目录的路径
+        
+    Returns:
+        str: 绝对路径
+    """
+    data_root = get_data_root()
+    return str(data_root / relative_path)
+
+def resolve_project_path(relative_path: str) -> str:
+    """解析项目相关路径，基于项目根目录
+    
+    Args:
+        relative_path: 相对于项目根目录的路径
+        
+    Returns:
+        str: 绝对路径
+    """
+    return str(PROJECT_ROOT / relative_path)
+
 
 @dataclass
 class DatabaseConfig:
     """数据库配置"""
     type: str = "duckdb"
-    path: str = "data/stock_data.duckdb"
+    path: str = resolve_data_path("stock_data.duckdb")
     memory_mode: bool = False
     pool_size: int = 5
     query_timeout: int = 300
@@ -53,7 +98,7 @@ class LoggingConfig:
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     file: Dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
-        "path": "logs/stock_data.log",
+        "path": resolve_project_path("logs/stock_data.log"),
         "max_size": 10,
         "backup_count": 5
     })
@@ -102,7 +147,7 @@ class DevelopmentConfig:
     """开发配置"""
     debug_mode: bool = False
     profiling: bool = False
-    test_database: str = "test_stock_data.db"
+    test_database: str = resolve_data_path("test_stock_data.duckdb")
     mock_data: bool = False
 
 
@@ -193,24 +238,38 @@ class Config:
     
     def _load_default_config(self) -> None:
         """加载默认配置文件"""
+        # 获取项目根目录（config.py所在目录）
+        project_dir = Path(__file__).parent.resolve()
+        
         default_paths = [
             "config.yaml",
-            "config.yml",
+            "config.yml", 
             "config.json",
             "stock_data_config.yaml",
             "stock_data_config.yml"
         ]
         
+        # 只在项目目录查找配置文件
         for path in default_paths:
-            if Path(path).exists():
-                self.load_config(path)
-                break
+            config_path = project_dir / path
+            if config_path.exists():
+                self.load_config(str(config_path))
+                self.logger.info(f"加载项目配置文件: {config_path}")
+                return
+        
+        # 如果项目目录没有配置文件，记录警告但继续使用默认配置
+        self.logger.warning(f"项目目录未找到配置文件: {project_dir}，使用默认配置")
     
     def _load_from_env(self) -> None:
         """从环境变量加载配置"""
         # 数据库配置
         if os.getenv("STOCK_DB_PATH"):
-            self.database.path = os.getenv("STOCK_DB_PATH")
+            db_path = os.getenv("STOCK_DB_PATH")
+            # 如果是绝对路径直接使用，否则基于数据根目录
+            if Path(db_path).is_absolute():
+                self.database.path = db_path
+            else:
+                self.database.path = resolve_data_path(db_path)
         
         # 聚宽配置
         jq_username = os.getenv("JQ_USERNAME")
@@ -251,6 +310,9 @@ class Config:
             db_config = config_data["database"]
             for key, value in db_config.items():
                 if hasattr(self.database, key):
+                    # 特殊处理数据库路径，需要解析为绝对路径
+                    if key == "path" and not Path(value).is_absolute():
+                        value = resolve_data_path(value)
                     setattr(self.database, key, value)
         
         # 更新数据源配置

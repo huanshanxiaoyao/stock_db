@@ -1,0 +1,540 @@
+# 数据质量检查配置文件
+# 版本: 1.0
+# 说明: 定义各表的数据质量检查规则和阈值
+
+# 全局配置
+global_config:
+  # 检查级别配置
+  check_levels:
+    quick:
+      timeout_seconds: 120
+      sample_size: 100
+      description: "快速检查，适用于日常监控"
+    standard:
+      timeout_seconds: 600
+      sample_size: 500
+      description: "标准检查，适用于全面诊断"
+
+  # 全局阈值
+  thresholds:
+    # NULL值检查阈值
+    null_ratio_warning: 0.10      # 10%以上为警告
+    null_ratio_critical: 0.30     # 30%以上为严重
+
+    # 价格相关阈值
+    price_change_limit: 0.50      # 50%价格变动限制
+    volume_anomaly_ratio: 10      # 成交量异常倍数
+
+    # 时间相关阈值
+    data_freshness_days: 1        # 数据新鲜度要求（天）
+    max_gap_days: 7              # 最大数据间隔（天）
+
+    # 计算精度阈值
+    financial_ratio_tolerance: 0.05  # 财务比率计算容忍度（5%）
+
+    # 用户数据检查起始日期 (测试期数据稳定性差，从此日期开始检查)
+    user_data_start_date: '2025-05-12'
+
+# 表级配置
+tables:
+  # 股票基础信息表
+  stock_list:
+    description: "股票基础信息表"
+    primary_keys: ["code"]
+    enabled: true
+
+    # 完整性检查
+    completeness_checks:
+      - name: "table_not_empty"
+        description: "表不能为空"
+        severity: "critical"
+        sql: "SELECT COUNT(*) as count FROM stock_list"
+        condition: "count > 0"
+
+      - name: "required_fields_not_null"
+        description: "关键字段不能为NULL"
+        severity: "critical"
+        fields: ["code", "display_name", "start_date"]
+        sql_template: "SELECT COUNT(*) as null_count FROM stock_list WHERE {field} IS NULL"
+        threshold: 0
+
+      - name: "active_stocks_coverage"
+        description: "活跃股票覆盖检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as active_count
+          FROM stock_list
+          WHERE (end_date IS NULL OR end_date > CURRENT_DATE)
+          AND status = 'normal'
+        condition: "active_count >= 4000"  # 预期活跃股票数量
+
+    # 唯一性检查
+    uniqueness_checks:
+      - name: "primary_key_unique"
+        description: "主键唯一性检查"
+        severity: "critical"
+        sql: |
+          SELECT code, COUNT(*) as count
+          FROM stock_list
+          GROUP BY code
+          HAVING COUNT(*) > 1
+
+    # 准确性检查
+    accuracy_checks:
+      - name: "stock_code_format"
+        description: "股票代码格式检查"
+        severity: "critical"
+        sql: |
+          SELECT COUNT(*) as invalid_count
+          FROM stock_list
+          WHERE NOT (code LIKE '%.SH' OR code LIKE '%.SZ' OR code LIKE '%.BJ')
+        condition: "invalid_count = 0"
+
+      - name: "date_logic_validation"
+        description: "日期逻辑检查"
+        severity: "critical"
+        sql: |
+          SELECT COUNT(*) as invalid_count
+          FROM stock_list
+          WHERE end_date IS NOT NULL AND end_date < start_date
+        condition: "invalid_count = 0"
+
+      - name: "exchange_code_validation"
+        description: "交易所代码有效性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as invalid_count
+          FROM stock_list
+          WHERE exchange IS NOT NULL
+          AND exchange NOT IN ('XSHG', 'XSHE', 'BSE')
+        condition: "invalid_count = 0"
+
+  # 价格数据表
+  price_data:
+    description: "股票价格数据表"
+    primary_keys: ["code", "day"]
+    enabled: true
+
+    completeness_checks:
+      - name: "table_not_empty"
+        description: "表不能为空"
+        severity: "critical"
+        sql: "SELECT COUNT(*) as count FROM price_data"
+        condition: "count > 0"
+
+      - name: "required_fields_not_null"
+        description: "关键字段不能为NULL"
+        severity: "critical"
+        fields: ["code", "day", "open", "high", "low", "close", "volume"]
+        sql_template: |
+          SELECT COUNT(*) as null_count
+          FROM price_data p
+          JOIN stock_list s ON p.code = s.code
+          WHERE p.{field} IS NULL
+          AND p.day >= s.start_date
+          AND (s.end_date IS NULL OR p.day <= s.end_date)
+        threshold: 0
+
+      - name: "time_series_completeness"
+        description: "时间序列完整性检查"
+        severity: "warning"
+        check_type: "time_series"
+        sample_based: true
+        sql_base: |
+          SELECT code, start_date, end_date
+          FROM stock_list
+          WHERE (end_date IS NULL OR end_date > CURRENT_DATE)
+          ORDER BY RANDOM()
+          LIMIT {sample_size}
+        completion_threshold: 0.95  # 95%完整性要求
+
+      - name: "recent_data_availability"
+        description: "最新数据可用性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(DISTINCT code) as stocks_with_recent_data
+          FROM price_data
+          WHERE day >= CURRENT_DATE - INTERVAL '3 days'
+        condition: "stocks_with_recent_data >= 4880"
+
+    uniqueness_checks:
+      - name: "primary_key_unique"
+        description: "联合主键唯一性检查"
+        severity: "critical"
+        sql: |
+          SELECT code, day, COUNT(*) as count
+          FROM price_data
+          GROUP BY code, day
+          HAVING COUNT(*) > 1
+
+    accuracy_checks:
+      - name: "price_logic_validation"
+        description: "价格逻辑检查"
+        severity: "critical"
+        sql: |
+          SELECT COUNT(*) as invalid_count
+          FROM price_data p
+          JOIN stock_list s ON p.code = s.code
+          WHERE (high < low
+          OR open < 0 OR high < 0 OR low < 0 OR close < 0
+          OR volume < 0)
+          AND p.day >= s.start_date
+          AND (s.end_date IS NULL OR p.day <= s.end_date)
+        condition: "invalid_count = 0"
+
+      - name: "price_range_validation"
+        description: "价格范围合理性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as extreme_count
+          FROM price_data p
+          JOIN stock_list s ON p.code = s.code
+          WHERE (high > close * 1.15
+          OR low < close * 0.85
+          OR close > 1000
+          OR close < 0.01)
+          AND p.day >= s.start_date
+          AND (s.end_date IS NULL OR p.day <= s.end_date)
+        condition: "extreme_count < 90"
+
+      - name: "abnormal_volatility_detection"
+        description: "异常波动检测"
+        severity: "warning"
+        level: "standard"  # 仅在标准检查中执行
+        sql: |
+          SELECT COUNT(*) as volatile_count
+          FROM (
+            SELECT p.code, p.day, p.close,
+                   LAG(p.close) OVER (PARTITION BY p.code ORDER BY p.day) as prev_close,
+                   ABS(p.close - LAG(p.close) OVER (PARTITION BY p.code ORDER BY p.day)) /
+                   LAG(p.close) OVER (PARTITION BY p.code ORDER BY p.day) as change_ratio
+            FROM price_data p
+            JOIN stock_list s ON p.code = s.code
+            WHERE p.day >= CURRENT_DATE - INTERVAL '30 days'
+            AND p.day >= s.start_date
+            AND (s.end_date IS NULL OR p.day <= s.end_date)
+          ) t
+          WHERE prev_close > 0 AND change_ratio > {price_change_limit}
+        condition: "volatile_count < 100"
+
+  # 估值数据表
+  valuation_data:
+    description: "股票估值数据表"
+    primary_keys: ["code", "day"]
+    enabled: true
+
+    completeness_checks:
+      - name: "data_alignment_with_price"
+        description: "与价格数据对齐检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as missing_count
+          FROM price_data p
+          JOIN stock_list s ON p.code = s.code
+          LEFT JOIN valuation_data v ON p.code = v.code AND p.day = v.day
+          WHERE v.code IS NULL
+          AND p.day >= CURRENT_DATE - INTERVAL '30 days'
+          AND p.day >= s.start_date
+          AND (s.end_date IS NULL OR p.day <= s.end_date)
+        condition: "missing_count < 1000"
+
+    accuracy_checks:
+      - name: "valuation_ratios_reasonableness"
+        description: "估值比率合理性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as extreme_count
+          FROM valuation_data v
+          JOIN stock_list s ON v.code = s.code
+          WHERE ((pe_ratio IS NOT NULL AND (pe_ratio < -1000 OR pe_ratio > 1000))
+          OR (pb_ratio IS NOT NULL AND (pb_ratio < 0 OR pb_ratio > 100))
+          OR (market_cap IS NOT NULL AND market_cap < 0))
+          AND v.day >= s.start_date
+          AND (s.end_date IS NULL OR v.day <= s.end_date)
+        condition: "extreme_count < 90"
+
+  # 技术指标表
+  indicator_data:
+    description: "技术指标数据表"
+    primary_keys: ["code", "statDate"]
+    enabled: true
+
+    completeness_checks:
+      - name: "quarterly_data_completeness"
+        description: "季度数据完整性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(DISTINCT code) as stocks_with_indicators
+          FROM indicator_data
+          WHERE statDate >= DATE_TRUNC('quarter', CURRENT_DATE - INTERVAL '1 quarter')
+        condition: "stocks_with_indicators >= 4340"
+
+    accuracy_checks:
+      - name: "financial_ratios_validation"
+        description: "财务比率有效性检查"
+        severity: "warning"
+        sql: |
+          SELECT COUNT(*) as invalid_count
+          FROM indicator_data
+          WHERE (eps IS NOT NULL AND ABS(eps) > 100)
+          OR (roe IS NOT NULL AND (roe < -1 OR roe > 1))
+          OR (roa IS NOT NULL AND (roa < -1 OR roa > 1))
+        condition: "invalid_count < 5000"
+
+  # 用户交易记录表
+  user_transactions:
+    description: "用户交易记录表"
+    primary_keys: ["trade_id"]
+    enabled: true
+
+    completeness_checks:
+      - name: "required_fields_completeness"
+        description: "必填字段完整性检查"
+        severity: "critical"
+        fields: ["trade_id", "user_id", "stock_code", "trade_date", "trade_type"]
+        sql_template: "SELECT trade_id, user_id, stock_code, trade_date FROM user_transactions WHERE {field} IS NULL"
+        threshold: 0
+
+      - name: "non_trading_day_transactions"
+        description: "非交易日交易检查"
+        severity: "critical"
+        sql: |
+          SELECT ut.user_id, ut.trade_id, ut.stock_code, ut.trade_date,
+                 'non_trading_day_transaction' as issue_type
+          FROM user_transactions ut
+          LEFT JOIN (SELECT DISTINCT day FROM price_data) pd ON ut.trade_date = pd.day
+          WHERE pd.day IS NULL AND ut.trade_date >= '{user_data_start_date}'
+          ORDER BY ut.trade_date, ut.user_id
+
+      - name: "stock_code_reference_integrity"
+        description: "股票代码关联完整性检查"
+        severity: "warning"
+        sql: |
+          SELECT ut.user_id, ut.stock_code, ut.trade_date, ut.trade_id
+          FROM user_transactions ut
+          LEFT JOIN stock_list sl ON ut.stock_code = sl.code
+          WHERE sl.code IS NULL
+          ORDER BY ut.trade_date DESC
+
+    uniqueness_checks:
+      - name: "trade_id_unique"
+        description: "交易ID唯一性检查"
+        severity: "critical"
+        sql: |
+          SELECT trade_id, user_id, stock_code, COUNT(*) as duplicate_count
+          FROM user_transactions
+          GROUP BY trade_id, user_id, stock_code
+          HAVING COUNT(*) > 1
+          ORDER BY duplicate_count DESC
+
+    accuracy_checks:
+      - name: "trade_type_validation"
+        description: "交易类型有效性检查"
+        severity: "critical"
+        sql: |
+          SELECT user_id, trade_id, stock_code, trade_type, trade_date
+          FROM user_transactions
+          WHERE trade_type NOT IN (23, 24)
+          ORDER BY trade_date DESC
+
+      - name: "quantity_price_validation"
+        description: "数量价格有效性检查"
+        severity: "critical"
+        sql: |
+          SELECT user_id, trade_id, stock_code, quantity, price, trade_date
+          FROM user_transactions
+          WHERE quantity <= 0 OR price <= 0
+          ORDER BY trade_date DESC
+
+      - name: "amount_calculation_accuracy"
+        description: "金额计算准确性检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, trade_id, stock_code, quantity, price, amount,
+                 (quantity * price) as calculated_amount,
+                 ABS(quantity * price - amount) / amount as error_ratio,
+                 trade_date
+          FROM user_transactions
+          WHERE quantity > 0 AND price > 0 AND amount > 0
+          AND ABS(quantity * price - amount) / amount > {financial_ratio_tolerance}
+          ORDER BY error_ratio DESC
+
+      - name: "trade_date_validation"
+        description: "交易日期有效性检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, trade_id, stock_code, trade_date
+          FROM user_transactions
+          WHERE trade_date > CURRENT_DATE
+          ORDER BY trade_date DESC
+
+  # 用户持仓记录表
+  user_positions:
+    description: "用户持仓记录表"
+    primary_keys: ["user_id", "position_date", "stock_code"]
+    enabled: true
+
+    completeness_checks:
+      - name: "trading_day_completeness"
+        description: "交易日数据完整性检查"
+        severity: "warning"
+        sql: |
+          SELECT pd.day as missing_date, 'missing_trading_day' as issue_type
+          FROM (SELECT DISTINCT day FROM price_data
+                WHERE day BETWEEN '{user_data_start_date}'
+                  AND (SELECT MAX(position_date) FROM user_positions)) pd
+          LEFT JOIN (SELECT DISTINCT position_date FROM user_positions
+                     WHERE position_date >= '{user_data_start_date}') up
+            ON pd.day = up.position_date
+          WHERE up.position_date IS NULL
+          ORDER BY pd.day
+
+      - name: "non_trading_day_check"
+        description: "非交易日数据检查"
+        severity: "warning"
+        sql: |
+          SELECT up.user_id, up.position_date, up.stock_code, 'non_trading_day_data' as issue_type
+          FROM user_positions up
+          LEFT JOIN (SELECT DISTINCT day FROM price_data) pd ON up.position_date = pd.day
+          WHERE pd.day IS NULL AND up.position_date >= '{user_data_start_date}'
+          ORDER BY up.position_date, up.user_id
+
+      - name: "position_continuity_check"
+        description: "持仓记录连续性检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, position_date, prev_date,
+                 (position_date - prev_date) as gap_days
+          FROM (
+            SELECT user_id, position_date,
+                   LAG(position_date) OVER (PARTITION BY user_id ORDER BY position_date) as prev_date
+            FROM user_positions
+          ) t
+          WHERE prev_date IS NOT NULL
+          AND position_date > prev_date + INTERVAL '{max_gap_days} days'
+          ORDER BY user_id, position_date
+
+    accuracy_checks:
+      - name: "position_quantity_logic"
+        description: "持仓数量逻辑检查"
+        severity: "critical"
+        sql: |
+          SELECT user_id, position_date, stock_code, position_quantity,
+                 available_quantity, frozen_quantity
+          FROM user_positions
+          WHERE position_quantity < 0
+          OR available_quantity < 0
+          OR frozen_quantity > position_quantity
+          OR available_quantity + frozen_quantity > position_quantity
+          ORDER BY position_date DESC
+
+      - name: "market_value_calculation"
+        description: "市值计算准确性检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, position_date, stock_code, position_quantity,
+                 current_price, market_value,
+                 (position_quantity * current_price) as calculated_value,
+                 ABS(position_quantity * current_price - market_value) / market_value as error_ratio
+          FROM user_positions
+          WHERE position_quantity > 0
+          AND current_price > 0
+          AND market_value > 0
+          AND ABS(position_quantity * current_price - market_value) / market_value > {financial_ratio_tolerance}
+          ORDER BY error_ratio DESC
+
+  # 用户账户信息表
+  user_account_info:
+    description: "用户账户信息表"
+    primary_keys: ["user_id", "info_date"]
+    enabled: true
+
+    accuracy_checks:
+      - name: "asset_balance_check"
+        description: "资产平衡检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, info_date, total_assets,
+                 (position_market_value + available_cash + frozen_cash) as calculated_total,
+                 ABS(total_assets - (position_market_value + available_cash + frozen_cash)) as diff
+          FROM user_account_info
+          WHERE total_assets > 0
+          AND ABS(total_assets - (position_market_value + available_cash + frozen_cash)) > 10
+          AND info_date >= '{user_data_start_date}'
+          ORDER BY diff DESC
+
+      - name: "negative_amounts_check"
+        description: "负金额检查"
+        severity: "warning"
+        sql: |
+          SELECT user_id, info_date, total_assets, position_market_value,
+                 available_cash, frozen_cash
+          FROM user_account_info
+          WHERE total_assets < 0
+          OR position_market_value < 0
+          OR available_cash < 0
+          OR frozen_cash < 0
+
+    completeness_checks:
+      - name: "trading_day_completeness"
+        description: "交易日数据完整性检查"
+        severity: "warning"
+        sql: |
+          SELECT pd.day as missing_date, 'missing_trading_day' as issue_type
+          FROM (SELECT DISTINCT day FROM price_data
+                WHERE day BETWEEN '{user_data_start_date}'
+                  AND (SELECT MAX(info_date) FROM user_account_info)) pd
+          LEFT JOIN (SELECT DISTINCT info_date FROM user_account_info
+                     WHERE info_date >= '{user_data_start_date}') ua
+            ON pd.day = ua.info_date
+          WHERE ua.info_date IS NULL
+          ORDER BY pd.day
+
+      - name: "non_trading_day_check"
+        description: "非交易日数据检查"
+        severity: "warning"
+        sql: |
+          SELECT ua.user_id, ua.info_date, 'non_trading_day_data' as issue_type
+          FROM user_account_info ua
+          LEFT JOIN (SELECT DISTINCT day FROM price_data) pd ON ua.info_date = pd.day
+          WHERE pd.day IS NULL AND ua.info_date >= '{user_data_start_date}'
+          ORDER BY ua.info_date
+
+# 检查执行配置
+execution_config:
+  # 并行执行配置
+  parallel_execution:
+    enabled: true
+    max_workers: 3
+    timeout_per_check: 60
+
+  # 报告配置
+  reporting:
+    console_output: true
+    json_report: true
+    log_details: true
+    max_samples_per_issue: 5
+
+  # 错误处理
+  error_handling:
+    continue_on_error: true
+    max_errors_per_table: 5
+    isolation_level: "table"  # table, check, none
+
+# 扩展配置
+extensions:
+  # 自定义检查脚本
+  custom_checks:
+    enabled: false
+    script_directory: "custom_checks"
+
+  # 外部数据验证
+  external_validation:
+    enabled: false
+    endpoints: []
+
+  # 趋势分析
+  trend_analysis:
+    enabled: false
+    history_days: 30
+    alert_threshold: 0.2  # 20%恶化阈值

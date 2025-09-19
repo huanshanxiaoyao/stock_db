@@ -34,13 +34,15 @@ logger = logging.getLogger(__name__)
 class StockDataAPIServer:
     """股票数据API服务器"""
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", use_replica: bool = True):
         """初始化API服务器
         
         Args:
             config_path: 配置文件路径
+            use_replica: 是否使用数据库副本模式
         """
         self.config = get_config(config_path)
+        self.use_replica = use_replica
         self.app = Flask(__name__)
         
         # 启用CORS支持
@@ -57,13 +59,16 @@ class StockDataAPIServer:
         self._setup_routes()
         self._setup_error_handlers()
         
-        logger.info("股票数据API服务器初始化完成")
+        if use_replica:
+            logger.info("股票数据API服务器初始化完成（副本模式）")
+        else:
+            logger.info("股票数据API服务器初始化完成（直连模式）")
     
     def _get_data_api(self) -> StockDataAPI:
         """获取数据API实例（延迟初始化）"""
         if self.data_api is None:
             db_path = self.config.database.path if hasattr(self.config, 'database') else 'stock_data.duckdb'
-            self.data_api = StockDataAPI(db_path)
+            self.data_api = StockDataAPI(db_path, use_replica=self.use_replica)
             self.data_api.initialize()
         return self.data_api
     
@@ -91,7 +96,11 @@ class StockDataAPIServer:
                     'price': '/api/v1/stocks/{code}/price',
                     'financial': '/api/v1/stocks/{code}/financial',
                     'analysis': '/api/v1/analysis',
-                    'database': '/api/v1/database'
+                    'database': '/api/v1/database',
+                    'transactions': '/api/v1/transactions',
+                    'recent_transactions': '/api/v1/transactions/recent',
+                    'positions': '/api/v1/positions',
+                    'accounts': '/api/v1/accounts'
                 }
             })
         
@@ -371,15 +380,15 @@ class StockDataAPIServer:
                 # 构建SQL查询
                 field_str = ', '.join(fields)
                 codes_str = "', '".join(codes)
-                
-                sql = f"SELECT code, date, {field_str} FROM price_data WHERE code IN ('{codes_str}')"
-                
+
+                sql = f"SELECT code, day as date, {field_str} FROM price_data WHERE code IN ('{codes_str}')"
+
                 if start_date:
-                    sql += f" AND date >= '{start_date}'"
+                    sql += f" AND day >= '{start_date}'"
                 if end_date:
-                    sql += f" AND date <= '{end_date}'"
-                
-                sql += " ORDER BY code, date"
+                    sql += f" AND day <= '{end_date}'"
+
+                sql += " ORDER BY code, day"
                 
                 # 执行查询
                 df = api.query(sql)
@@ -465,14 +474,14 @@ class StockDataAPIServer:
                 
                 # 根据指标构建查询
                 if metric == 'market_cap':
-                    sql = f"SELECT DISTINCT code, market_cap FROM fundamental_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
+                    sql = f"SELECT DISTINCT code, market_cap FROM valuation_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
                 elif metric == 'pe_ratio':
-                    sql = f"SELECT DISTINCT code, pe_ratio FROM fundamental_data WHERE pe_ratio IS NOT NULL ORDER BY pe_ratio {order_clause} LIMIT ?"
+                    sql = f"SELECT DISTINCT code, pe_ratio FROM valuation_data WHERE pe_ratio IS NOT NULL ORDER BY pe_ratio {order_clause} LIMIT ?"
                 elif metric == 'pb_ratio':
-                    sql = f"SELECT DISTINCT code, pb_ratio FROM fundamental_data WHERE pb_ratio IS NOT NULL ORDER BY pb_ratio {order_clause} LIMIT ?"
+                    sql = f"SELECT DISTINCT code, pb_ratio FROM valuation_data WHERE pb_ratio IS NOT NULL ORDER BY pb_ratio {order_clause} LIMIT ?"
                 else:
                     # 默认按市值排序
-                    sql = f"SELECT DISTINCT code, market_cap FROM fundamental_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
+                    sql = f"SELECT DISTINCT code, market_cap FROM valuation_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
                 
                 # 执行查询
                 df = api.query(sql, [limit])
@@ -511,6 +520,416 @@ class StockDataAPIServer:
                 
             except Exception as e:
                 logger.error(f"获取排行榜失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        
+        # ==================== 用户交易记录相关API ====================
+        
+        # 获取用户交易记录
+        @self.app.route('/api/v1/transactions', methods=['GET'])
+        def get_user_transactions():
+            """获取用户交易记录"""
+            try:
+                api = self._get_data_api()
+                
+                # 获取查询参数
+                user_id = request.args.get('user_id')
+                stock_code = request.args.get('stock_code')
+                trade_date = request.args.get('trade_date')
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+                trade_type = request.args.get('trade_type', type=int)
+                limit = request.args.get('limit', 100, type=int)
+                offset = request.args.get('offset', 0, type=int)
+                
+                # 参数验证
+                if trade_date:
+                    trade_date = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                # 构建查询条件
+                conditions = []
+                params = []
+                
+                if user_id:
+                    conditions.append("user_id = ?")
+                    params.append(user_id)
+                if stock_code:
+                    conditions.append("stock_code = ?")
+                    params.append(stock_code)
+                if trade_date:
+                    conditions.append("trade_date = ?")
+                    params.append(trade_date)
+                if start_date:
+                    conditions.append("trade_date >= ?")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("trade_date <= ?")
+                    params.append(end_date)
+                if trade_type is not None:
+                    conditions.append("trade_type = ?")
+                    params.append(trade_type)
+                
+                # 构建SQL查询
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+                count_sql = f"SELECT COUNT(*) as total FROM user_transactions WHERE {where_clause}"
+                
+                # 获取总数
+                count_result = api.query(count_sql, params)
+                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                
+                # 构建分页查询
+                sql = f"SELECT * FROM user_transactions WHERE {where_clause} ORDER BY trade_date DESC, trade_time DESC"
+                if limit:
+                    sql += f" LIMIT {limit} OFFSET {offset}"
+                
+                # 执行查询
+                result = api.query(sql, params)
+                
+                return jsonify({
+                    'success': True,
+                    'data': result.to_dict('records') if not result.empty else [],
+                    'pagination': {
+                        'total': total,
+                        'limit': limit,
+                        'offset': offset,
+                        'count': len(result)
+                    }
+                })
+                
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取用户交易记录失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        
+        # 获取用户最近N天的交易记录
+        @self.app.route('/api/v1/transactions/recent', methods=['GET'])
+        def get_recent_transactions():
+            """获取用户最近N天的交易记录"""
+            try:
+                api = self._get_data_api()
+                
+                # 获取查询参数
+                user_id = request.args.get('user_id')
+                days = request.args.get('days', 7, type=int)
+                stock_code = request.args.get('stock_code')
+                trade_type = request.args.get('trade_type', type=int)
+                limit = request.args.get('limit', 1000, type=int)
+                
+                # 参数验证
+                if not user_id:
+                    return jsonify({
+                        'success': False,
+                        'error': '用户ID不能为空'
+                    }), 400
+                
+                if days <= 0 or days > 365:
+                    return jsonify({
+                        'success': False,
+                        'error': '天数必须在1-365之间'
+                    }), 400
+                
+                # 计算日期范围
+                from datetime import timedelta
+                end_date = datetime.now().date()
+                start_date = end_date - timedelta(days=days)
+                
+                # 构建查询条件
+                conditions = ["user_id = ?", "trade_date >= ?", "trade_date <= ?"]
+                params = [user_id, start_date, end_date]
+                
+                if stock_code:
+                    conditions.append("stock_code = ?")
+                    params.append(stock_code)
+                if trade_type is not None:
+                    conditions.append("trade_type = ?")
+                    params.append(trade_type)
+                
+                # 构建SQL查询
+                where_clause = " AND ".join(conditions)
+                sql = f"SELECT * FROM user_transactions WHERE {where_clause} ORDER BY trade_date DESC, trade_time DESC LIMIT {limit}"
+                
+                # 执行查询
+                result = api.query(sql, params)
+                
+                return jsonify({
+                    'success': True,
+                    'data': result.to_dict('records') if not result.empty else [],
+                    'query_info': {
+                        'user_id': user_id,
+                        'days': days,
+                        'start_date': str(start_date),
+                        'end_date': str(end_date),
+                        'stock_code': stock_code,
+                        'trade_type': trade_type,
+                        'count': len(result)
+                    }
+                })
+                
+            except Exception as e:
+                logger.error(f"获取最近交易记录失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        
+        # ==================== 用户持仓相关API ====================
+        
+        # 获取用户持仓记录
+        @self.app.route('/api/v1/positions', methods=['GET'])
+        def get_user_positions():
+            """获取用户持仓记录"""
+            try:
+                api = self._get_data_api()
+                
+                # 获取查询参数
+                user_id = request.args.get('user_id')
+                stock_code = request.args.get('stock_code')
+                position_date = request.args.get('position_date')
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+                limit = request.args.get('limit', type=int)
+                offset = request.args.get('offset', 0, type=int)
+                
+                # 参数验证
+                if position_date:
+                    position_date = datetime.strptime(position_date, '%Y-%m-%d').date()
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                # 构建查询条件
+                conditions = []
+                params = []
+                
+                if user_id:
+                    conditions.append("user_id = ?")
+                    params.append(user_id)
+                if stock_code:
+                    conditions.append("stock_code = ?")
+                    params.append(stock_code)
+                if position_date:
+                    conditions.append("position_date = ?")
+                    params.append(position_date)
+                if start_date:
+                    conditions.append("position_date >= ?")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("position_date <= ?")
+                    params.append(end_date)
+                
+                # 构建SQL查询
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+                count_sql = f"SELECT COUNT(*) as total FROM user_positions WHERE {where_clause}"
+                
+                # 获取总数
+                count_result = api.query(count_sql, params)
+                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                
+                # 构建分页查询
+                sql = f"SELECT * FROM user_positions WHERE {where_clause} ORDER BY position_date DESC, user_id, stock_code"
+                if limit:
+                    sql += f" LIMIT {limit} OFFSET {offset}"
+                
+                # 执行查询
+                result = api.query(sql, params)
+                
+                return jsonify({
+                    'success': True,
+                    'data': result.to_dict('records') if not result.empty else [],
+                    'pagination': {
+                        'total': total,
+                        'limit': limit,
+                        'offset': offset,
+                        'count': len(result)
+                    }
+                })
+                
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取用户持仓记录失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        
+        # 获取用户账户信息
+        @self.app.route('/api/v1/accounts', methods=['GET'])
+        def get_user_accounts():
+            """获取用户账户信息"""
+            try:
+                api = self._get_data_api()
+                
+                # 获取查询参数
+                user_id = request.args.get('user_id')
+                info_date = request.args.get('info_date')
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+                limit = request.args.get('limit', type=int)
+                offset = request.args.get('offset', 0, type=int)
+                
+                # 参数验证
+                if info_date:
+                    info_date = datetime.strptime(info_date, '%Y-%m-%d').date()
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                
+                # 构建查询条件
+                conditions = []
+                params = []
+                
+                if user_id:
+                    conditions.append("user_id = ?")
+                    params.append(user_id)
+                if info_date:
+                    conditions.append("info_date = ?")
+                    params.append(info_date)
+                if start_date:
+                    conditions.append("info_date >= ?")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("info_date <= ?")
+                    params.append(end_date)
+                
+                # 构建SQL查询
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+                count_sql = f"SELECT COUNT(*) as total FROM user_account_info WHERE {where_clause}"
+                
+                # 获取总数
+                count_result = api.query(count_sql, params)
+                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                
+                # 构建分页查询
+                sql = f"SELECT * FROM user_account_info WHERE {where_clause} ORDER BY info_date DESC, user_id"
+                if limit:
+                    sql += f" LIMIT {limit} OFFSET {offset}"
+                
+                # 执行查询
+                result = api.query(sql, params)
+                
+                return jsonify({
+                    'success': True,
+                    'data': result.to_dict('records') if not result.empty else [],
+                    'pagination': {
+                        'total': total,
+                        'limit': limit,
+                        'offset': offset,
+                        'count': len(result)
+                    }
+                })
+                
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取用户账户信息失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+        
+        # 获取用户持仓汇总
+        @self.app.route('/api/v1/positions/summary', methods=['GET'])
+        def get_positions_summary():
+            """获取用户持仓汇总信息"""
+            try:
+                api = self._get_data_api()
+                
+                # 获取查询参数
+                user_id = request.args.get('user_id')
+                position_date = request.args.get('position_date')
+                
+                if not user_id:
+                    return jsonify({
+                        'success': False,
+                        'error': '用户ID不能为空'
+                    }), 400
+                
+                # 参数验证
+                if position_date:
+                    position_date = datetime.strptime(position_date, '%Y-%m-%d').date()
+                else:
+                    # 默认使用最新日期
+                    latest_date_sql = "SELECT MAX(position_date) as latest_date FROM user_positions WHERE user_id = ?"
+                    latest_result = api.query(latest_date_sql, [user_id])
+                    if not latest_result.empty and latest_result.iloc[0]['latest_date']:
+                        position_date = latest_result.iloc[0]['latest_date']
+                    else:
+                        return jsonify({
+                            'success': False,
+                            'error': f'用户 {user_id} 没有持仓记录'
+                        }), 404
+                
+                # 获取持仓汇总
+                summary_sql = """
+                SELECT 
+                    COUNT(*) as total_positions,
+                    COUNT(DISTINCT stock_code) as unique_stocks,
+                    SUM(current_quantity) as total_quantity,
+                    SUM(market_value) as total_market_value,
+                    SUM(unrealized_pnl) as total_unrealized_pnl,
+                    AVG(unrealized_pnl_ratio) as avg_pnl_ratio
+                FROM user_positions 
+                WHERE user_id = ? AND position_date = ? AND current_quantity > 0
+                """
+                
+                summary_result = api.query(summary_sql, [user_id, position_date])
+                
+                if summary_result.empty:
+                    return jsonify({
+                        'success': False,
+                        'error': f'用户 {user_id} 在 {position_date} 没有持仓记录'
+                    }), 404
+                
+                # 获取前5大持仓
+                top_positions_sql = """
+                SELECT stock_code, stock_name, current_quantity, market_value, unrealized_pnl, unrealized_pnl_ratio
+                FROM user_positions 
+                WHERE user_id = ? AND position_date = ? AND current_quantity > 0
+                ORDER BY market_value DESC 
+                LIMIT 5
+                """
+                
+                top_positions = api.query(top_positions_sql, [user_id, position_date])
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'user_id': user_id,
+                        'position_date': str(position_date),
+                        'summary': summary_result.to_dict('records')[0],
+                        'top_positions': top_positions.to_dict('records') if not top_positions.empty else []
+                    }
+                })
+                
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取持仓汇总失败: {e}")
                 return jsonify({
                     'success': False,
                     'error': str(e)
@@ -576,6 +995,8 @@ class StockDataAPIServer:
                     'success': False,
                     'error': str(e)
                 }), 500
+        
+
     
     def _setup_error_handlers(self):
         """设置错误处理器"""
@@ -620,16 +1041,23 @@ class StockDataAPIServer:
         return self.app
 
 
-def create_app(config_path: str = "config.yaml") -> Flask:
-    """创建Flask应用实例
+def create_app(config_path: str = "config.yaml", use_replica: bool = True) -> Flask:
+    """
+    创建Flask应用实例
     
     Args:
         config_path: 配置文件路径
+        use_replica: 是否使用数据库副本模式
         
     Returns:
         Flask应用实例
     """
-    server = StockDataAPIServer(config_path)
+    # 从环境变量读取配置（用于生产环境）
+    config_path = os.environ.get('CONFIG_PATH', config_path)
+    use_replica_env = os.environ.get('USE_REPLICA', 'true').lower()
+    use_replica = use_replica_env == 'true'
+    
+    server = StockDataAPIServer(config_path, use_replica=use_replica)
     return server.get_app()
 
 
@@ -641,9 +1069,11 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=5000, help='监听端口')
     parser.add_argument('--debug', action='store_true', help='启用调试模式')
     parser.add_argument('--config', default='config.yaml', help='配置文件路径')
+    parser.add_argument('--no-replica', action='store_true', help='禁用数据库副本模式（使用直连模式）')
     
     args = parser.parse_args()
     
     # 创建并启动服务器
-    server = StockDataAPIServer(args.config)
+    use_replica = not args.no_replica
+    server = StockDataAPIServer(args.config, use_replica=use_replica)
     server.run(host=args.host, port=args.port, debug=args.debug)

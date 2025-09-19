@@ -138,7 +138,7 @@ class StockListService:
             return True
     
     def get_active_stocks(self, exchange: Optional[str] = None, 
-                         market: Optional[str] = None) -> pd.DataFrame:
+                     market: Optional[str] = None) -> pd.DataFrame:
         """获取活跃股票列表
         
         Args:
@@ -149,25 +149,23 @@ class StockListService:
             pd.DataFrame: 股票列表
         """
         try:
-            sql = "SELECT * FROM stock_list WHERE status = 'normal' AND end_date IS NULL"
-            params = {}
+            # 构建查询条件和参数列表
+            conditions = []
+            params = []
             
             if exchange:
-                sql += " AND exchange = :exchange"
-                params['exchange'] = exchange
+                conditions.append("exchange = ?")
+                params.append(exchange)
             
             if market:
-                sql += " AND market = :market"
-                params['market'] = market
+                conditions.append("market = ?")
+                params.append(market)
             
-            sql += " ORDER BY code"
+            # 构建完整SQL
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            sql = f"SELECT * FROM stock_list WHERE {where_clause} AND status = 'normal' AND end_date IS NULL ORDER BY code"
             
-            if params:
-                result = self.database.query(sql, params)
-            else:
-                result = self.database.query(sql)
-            
-            return result
+            return self.database.query(sql, params)
             
         except Exception as e:
             self.logger.error(f"获取活跃股票列表失败: {e}")
@@ -183,8 +181,8 @@ class StockListService:
             StockInfo: 股票信息对象，如果不存在返回None
         """
         try:
-            sql = "SELECT * FROM stock_list WHERE code = :code"
-            result = self.database.query(sql, {'code': code})
+            sql = "SELECT * FROM stock_list WHERE code = ?"
+            result = self.database.query(sql, [code])
             
             if result.empty:
                 return None
@@ -224,31 +222,31 @@ class StockListService:
         try:
             sql = """
             SELECT * FROM stock_list 
-            WHERE (code LIKE :keyword1 OR display_name LIKE :keyword2 OR name LIKE :keyword3) 
+            WHERE (code LIKE ? OR display_name LIKE ? OR name LIKE ?) 
             AND status = 'normal' AND end_date IS NULL
             ORDER BY 
                 CASE 
-                    WHEN code = :exact_code THEN 1
-                    WHEN code LIKE :code_pattern THEN 2
-                    WHEN display_name LIKE :name_pattern THEN 3
+                    WHEN code = ? THEN 1
+                    WHEN code LIKE ? THEN 2
+                    WHEN display_name LIKE ? THEN 3
                     ELSE 4
                 END,
                 code
-            LIMIT :limit
+            LIMIT ?
             """
             
             keyword_pattern = f"%{keyword}%"
-            params = {
-                'keyword1': keyword_pattern,
-                'keyword2': keyword_pattern, 
-                'keyword3': keyword_pattern,
-                'exact_code': keyword,
-                'code_pattern': f"{keyword}%",
-                'name_pattern': f"{keyword}%",
-                'limit': limit
-            }
+            params = [
+                keyword_pattern,  # keyword1
+                keyword_pattern,  # keyword2
+                keyword_pattern,  # keyword3
+                keyword,          # exact_code
+                f"{keyword}%",     # code_pattern
+                f"{keyword}%",     # name_pattern
+                limit             # limit
+            ]
             
-            result = self.database.query(sql)
+            result = self.database.query(sql, params)
             return result
             
         except Exception as e:

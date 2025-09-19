@@ -50,6 +50,19 @@ class DatabaseInterface(ABC):
     def get_latest_date(self, table_name: str, code: Optional[str] = None) -> Optional[date]:
         """获取最新数据日期"""
         pass
+
+    @abstractmethod
+    def get_latest_dates_batch(self, table_name: str, codes: List[str]) -> Dict[str, Optional[date]]:
+        """批量获取多只股票的最新数据日期
+
+        Args:
+            table_name: 表名
+            codes: 股票代码列表
+
+        Returns:
+            Dict[str, Optional[date]]: 股票代码到最新日期的映射，如果股票没有数据则值为None
+        """
+        pass
     
     @abstractmethod
     def get_existing_codes(self, table_name: str) -> List[str]:
@@ -135,6 +148,10 @@ class DatabaseManager:
     def get_latest_date(self, table_name: str, code: Optional[str] = None) -> Optional[date]:
         """获取最新数据日期"""
         return self.db.get_latest_date(table_name, code)
+
+    def get_latest_dates_batch(self, table_name: str, codes: List[str]) -> Dict[str, Optional[date]]:
+        """批量获取多只股票的最新数据日期"""
+        return self.db.get_latest_dates_batch(table_name, codes)
     
     def get_existing_codes(self, table_name: str) -> List[str]:
         """获取已存在的股票代码"""
@@ -228,7 +245,7 @@ class DatabaseManager:
         
         # 查询各类市场数据
         market_tables = {
-            'fundamental_data': '基本面数据',
+            'valuation_data': '估值数据',
             'indicator_data': '技术指标数据',
             'mtss_data': '融资融券数据'
         }

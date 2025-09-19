@@ -276,6 +276,215 @@ update:
 
 ### 数据库表结构
 
+#### 用户交易记录表 (`user_transactions`)
+
+**目的**: 记录用户的股票买卖、分红、配股等所有交易行为，提供详细的交易流水。
+
+**设计要点**:
+- **唯一性**: 每笔交易应有唯一的标识
+- **时间戳**: 精确记录交易发生的时间
+- **关联性**: 能够关联到具体的股票和用户
+- **交易类型**: 区分买入、卖出、分红、配股等不同交易类型
+- **金额与数量**: 记录交易涉及的股票数量、价格和总金额
+- **备注**: 允许用户添加自定义备注信息
+
+**表结构**:
+
+```sql
+CREATE TABLE user_transactions (
+    transaction_id VARCHAR(64) PRIMARY KEY,     -- 交易唯一ID
+    user_id VARCHAR(64) NOT NULL,              -- 用户ID
+    stock_code VARCHAR(16) NOT NULL,           -- 股票代码，例如 '831010.BJ'
+    trade_date DATE NOT NULL,                  -- 交易日期（索引字段）
+    trade_datetime TIMESTAMP NOT NULL,         -- 交易日期时间
+    trade_type INTEGER NOT NULL,               -- 交易类型：23-买入，24-卖出
+    strategy_id VARCHAR(64),                   -- 策略ID，标记触发此交易的策略（索引字段）
+    volume INTEGER NOT NULL,                   -- 交易数量
+    price DECIMAL(10, 4) NOT NULL,             -- 交易价格
+    value DECIMAL(12, 4) NOT NULL,             -- 交易总金额
+    commission DECIMAL(10, 4) DEFAULT 0.0,     -- 佣金
+    tax DECIMAL(10, 4) DEFAULT 0.0,            -- 印花税
+    other_fees DECIMAL(10, 4) DEFAULT 0.0,     -- 其他费用
+    net_amount DECIMAL(12, 4) NOT NULL,        -- 净交易金额
+    order_id VARCHAR(64),                      -- 订单ID
+    trade_id VARCHAR(64),                      -- 交易流水号
+    remark VARCHAR(255),                       -- 备注信息
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建索引
+CREATE INDEX idx_user_transactions_user_id ON user_transactions(user_id);
+CREATE INDEX idx_user_transactions_stock_code ON user_transactions(stock_code);
+CREATE INDEX idx_user_transactions_trade_date ON user_transactions(trade_date);
+CREATE INDEX idx_user_transactions_strategy_id ON user_transactions(strategy_id);
+-- 复合索引：用于高效查询某用户某股票在特定日期范围的交易记录
+CREATE INDEX idx_user_transactions_composite ON user_transactions(user_id, stock_code, trade_date);
+```
+
+**字段说明**:
+
+| 字段名 | 类型 | 说明 | 示例 |
+|--------|------|------|------|
+| transaction_id | VARCHAR(64) | 交易唯一标识符 | 'TXN_20240101_001' |
+| user_id | VARCHAR(64) | 用户ID（索引字段） | 'user_001' |
+| stock_code | VARCHAR(16) | 股票代码（索引字段） | '831010.BJ' |
+| trade_date | DATE | 交易日期（索引字段） | '2024-01-15' |
+| trade_datetime | TIMESTAMP | 交易日期时间 | '2024-01-15 09:30:15' |
+| trade_type | INTEGER | 交易类型：23-买入，24-卖出 | 23 |
+| strategy_id | VARCHAR(64) | 策略ID，标记触发此交易的策略（索引字段） | 'MACD_001' |
+| volume | INTEGER | 交易数量 | 600 |
+| price | DECIMAL(10,4) | 交易价格 | 14.4500 |
+| value | DECIMAL(12,4) | 交易总金额 | 8670.0000 |
+| commission | DECIMAL(10,4) | 佣金 | 5.0000 |
+| tax | DECIMAL(10,4) | 印花税 | 8.6700 |
+| other_fees | DECIMAL(10,4) | 其他费用 | 0.0000 |
+| net_amount | DECIMAL(12,4) | 净交易金额 | 8683.6700 |
+| order_id | VARCHAR(64) | 订单ID | '1478492199' |
+| trade_id | VARCHAR(64) | 交易流水号 | '01250350' |
+| remark | VARCHAR(255) | 备注信息 | 'str1001_831010.BJ' |
+| created_at | TIMESTAMP | 记录创建时间 | '2024-01-15 09:30:15' |
+
+**与样例数据的对应关系**:
+- `StockCode` → `stock_code`
+- `Volume` → `volume`
+- `Price` → `price`
+- `Value` → `value`
+- `TradeType` → `trade_type` (23-买入，24-卖出)
+- `Remark` → `remark`
+- `OrderId` → `order_id`
+- `TradeId` → `trade_id`
+- `TradeTime` → `trade_datetime`
+
+#### 用户持仓记录表 (`user_positions`)
+
+**目的**: 记录用户每日的股票持仓情况，包括持仓数量、市值、成本价等信息，用于跟踪持仓变化和计算收益。
+
+**设计要点**:
+- **时间序列**: 按日期记录持仓快照，支持历史持仓查询
+- **用户隔离**: 不同用户的持仓数据完全隔离
+- **持仓状态**: 区分可用数量、冻结数量、在途股份等不同状态
+- **成本跟踪**: 记录开仓价格，便于计算盈亏
+- **账户信息**: 同时记录账户总资产、可用资金等汇总信息
+
+**表结构**:
+
+```sql
+CREATE TABLE user_positions (
+    position_id VARCHAR(64) PRIMARY KEY,       -- 持仓记录唯一ID
+    user_id VARCHAR(64) NOT NULL,              -- 用户ID
+    position_date DATE NOT NULL,               -- 持仓日期（索引字段）
+    stock_code VARCHAR(16) NOT NULL,           -- 股票代码，例如 '000030.SZ'
+    position_quantity INTEGER NOT NULL,        -- 持仓数量
+    available_quantity INTEGER NOT NULL,       -- 可用数量
+    frozen_quantity INTEGER DEFAULT 0,         -- 冻结数量
+    transit_shares INTEGER DEFAULT 0,          -- 在途股份
+    yesterday_quantity INTEGER DEFAULT 0,      -- 昨夜持股
+    open_price DECIMAL(10, 4) NOT NULL,        -- 开仓价格（成本价）
+    market_value DECIMAL(12, 4) NOT NULL,      -- 持仓市值
+    current_price DECIMAL(10, 4),              -- 当前价格
+    unrealized_pnl DECIMAL(12, 4),             -- 未实现盈亏
+    unrealized_pnl_ratio DECIMAL(8, 4),        -- 未实现盈亏比例
+    remark VARCHAR(255),                       -- 备注信息
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建索引
+CREATE INDEX idx_user_positions_user_id ON user_positions(user_id);
+CREATE INDEX idx_user_positions_date ON user_positions(position_date);
+CREATE INDEX idx_user_positions_stock_code ON user_positions(stock_code);
+-- 复合索引：用于高效查询某用户在特定日期的持仓记录
+CREATE INDEX idx_user_positions_composite ON user_positions(user_id, position_date);
+-- 唯一约束：确保同一用户同一日期同一股票只有一条记录
+CREATE UNIQUE INDEX idx_user_positions_unique ON user_positions(user_id, position_date, stock_code);
+```
+
+**字段说明**:
+
+| 字段名 | 类型 | 说明 | 示例 |
+|--------|------|------|------|
+| position_id | VARCHAR(64) | 持仓记录唯一标识符 | 'POS_20250901_001' |
+| user_id | VARCHAR(64) | 用户ID（索引字段） | '6681802461' |
+| position_date | DATE | 持仓日期（索引字段） | '2025-09-01' |
+| stock_code | VARCHAR(16) | 股票代码（索引字段） | '000030.SZ' |
+| position_quantity | INTEGER | 持仓数量 | 3500 |
+| available_quantity | INTEGER | 可用数量 | 3500 |
+| frozen_quantity | INTEGER | 冻结数量 | 0 |
+| transit_shares | INTEGER | 在途股份 | 0 |
+| yesterday_quantity | INTEGER | 昨夜持股 | 3500 |
+| open_price | DECIMAL(10,4) | 开仓价格（成本价） | 5.6815 |
+| market_value | DECIMAL(12,4) | 持仓市值 | 20055.0000 |
+| current_price | DECIMAL(10,4) | 当前价格 | 5.7300 |
+| unrealized_pnl | DECIMAL(12,4) | 未实现盈亏 | 169.7500 |
+| unrealized_pnl_ratio | DECIMAL(8,4) | 未实现盈亏比例 | 0.0085 |
+| remark | VARCHAR(255) | 备注信息 | '主板股票' |
+| created_at | TIMESTAMP | 记录创建时间 | '2025-09-01 15:20:03' |
+| updated_at | TIMESTAMP | 记录更新时间 | '2025-09-01 15:20:03' |
+
+#### 用户账户信息表 (`user_account_info`)
+
+**目的**: 记录用户每日的账户汇总信息，包括总资产、持仓市值、可用资金等。
+
+**表结构**:
+
+```sql
+CREATE TABLE user_account_info (
+    user_id VARCHAR(64) NOT NULL,              -- 用户ID（主键组成部分）
+    info_date DATE NOT NULL,                   -- 信息日期（主键组成部分）
+    total_assets DECIMAL(15, 2) NOT NULL,      -- 总资产
+    position_market_value DECIMAL(15, 2) NOT NULL, -- 持仓市值
+    available_cash DECIMAL(15, 2) NOT NULL,    -- 可用资金
+    frozen_cash DECIMAL(15, 2) DEFAULT 0.0,    -- 冻结资金
+    total_profit_loss DECIMAL(15, 2),          -- 总盈亏
+    total_profit_loss_ratio DECIMAL(8, 4),     -- 总盈亏比例
+    timestamp TIMESTAMP,                       -- 数据时间戳
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, info_date)           -- 联合主键
+);
+
+-- 创建索引（联合主键自动创建索引，无需额外创建）
+-- 如需要单独查询某个用户的所有记录，可以创建以下索引：
+-- CREATE INDEX idx_user_account_info_user_id ON user_account_info(user_id);
+-- 如需要单独查询某个日期的所有记录，可以创建以下索引：
+-- CREATE INDEX idx_user_account_info_date ON user_account_info(info_date);
+```
+
+**字段说明**:
+
+| 字段名 | 类型 | 说明 | 示例 |
+|--------|------|------|------|
+| user_id | VARCHAR(64) | 用户ID（联合主键组成部分） | '6681802461' |
+| info_date | DATE | 信息日期（联合主键组成部分） | '2025-09-01' |
+| total_assets | DECIMAL(15,2) | 总资产 | 490738.31 |
+| position_market_value | DECIMAL(15,2) | 持仓市值 | 441540.89 |
+| available_cash | DECIMAL(15,2) | 可用资金 | 49197.42 |
+| frozen_cash | DECIMAL(15,2) | 冻结资金 | 0.00 |
+| total_profit_loss | DECIMAL(15,2) | 总盈亏 | 12345.67 |
+| total_profit_loss_ratio | DECIMAL(8,4) | 总盈亏比例 | 0.0258 |
+| timestamp | TIMESTAMP | 数据时间戳 | '2025-09-01 15:20:03' |
+| created_at | TIMESTAMP | 记录创建时间 | '2025-09-01 15:20:03' |
+| updated_at | TIMESTAMP | 记录更新时间 | '2025-09-01 15:20:03' |
+
+**与JSON数据的对应关系**:
+
+**持仓数据 (positions)**:
+- `证券代码` → `stock_code`
+- `持仓数量` → `position_quantity`
+- `可用数量` → `available_quantity`
+- `冻结数量` → `frozen_quantity`
+- `在途股份` → `transit_shares`
+- `昨夜持股` → `yesterday_quantity`
+- `开仓价格` → `open_price`
+- `持仓市值` → `market_value`
+
+**账户信息 (account_info)**:
+- `总资产` → `total_assets`
+- `持仓市值` → `position_market_value`
+- `可用资金` → `available_cash`
+- `冻结资金` → `frozen_cash`
+- `timestamp` → `timestamp`
+
 #### 股票列表表 (`stock_list`)
 
 | 字段名 | 类型 | 说明 | 示例 |
@@ -462,46 +671,39 @@ update:
 | basic_eps | DOUBLE | 基本每股收益 | 1.23 |
 | diluted_eps | DOUBLE | 稀释每股收益 | 1.22 |
 
-#### 财务指标表 (`indicator_data`) - 基于聚宽API财务指标数据表
+#### 财务指标表 (`indicator_data`) - 严格基于聚宽API indicator财务指标表
 
 | 字段名 | 类型 | 说明 | 示例 |
 |--------|------|------|------|
-| code | VARCHAR | 股票代码 | 000001.XSHE |
-| day | DATE | 数据日期 | 2023-12-29 |
-| eps | DOUBLE | 每股收益 | 1.23 |
-| adjusted_profit | DOUBLE | 扣除非经常损益后的净利润 | 123456789.12 |
-| operating_profit | DOUBLE | 经营活动净收益 | 234567890.23 |
-| value_change_profit | DOUBLE | 价值变动净收益 | 12345678.90 |
-| roe | DOUBLE | 净资产收益率 | 0.1234 |
-| roa | DOUBLE | 总资产收益率 | 0.0987 |
-| roic | DOUBLE | 投入资本回报率 | 0.1567 |
-| inc_return | DOUBLE | 净资产收益率(增长率) | 0.0234 |
-| gross_profit_margin | DOUBLE | 毛利率 | 0.3456 |
-| net_profit_margin | DOUBLE | 净利率 | 0.1234 |
-| operating_profit_margin | DOUBLE | 营业利润率 | 0.2345 |
-| inc_revenue_year_on_year | DOUBLE | 营业收入同比增长率 | 0.1567 |
-| inc_profit_year_on_year | DOUBLE | 净利润同比增长率 | 0.2345 |
-| inc_net_profit_year_on_year | DOUBLE | 净利润同比增长率(年化) | 0.2567 |
-| inc_net_profit_to_shareholders_year_on_year | DOUBLE | 归母净利润同比增长率 | 0.2789 |
-| debt_to_assets | DOUBLE | 资产负债率 | 0.6789 |
-| debt_to_equity | DOUBLE | 产权比率 | 1.2345 |
-| current_ratio | DOUBLE | 流动比率 | 1.56 |
-| quick_ratio | DOUBLE | 速动比率 | 1.23 |
-| inventory_turnover | DOUBLE | 存货周转率 | 4.56 |
-| receivable_turnover | DOUBLE | 应收账款周转率 | 6.78 |
-| accounts_payable_turnover | DOUBLE | 应付账款周转率 | 8.90 |
-| current_assets_turnover | DOUBLE | 流动资产周转率 | 2.34 |
-| fixed_assets_turnover | DOUBLE | 固定资产周转率 | 3.45 |
-| total_assets_turnover | DOUBLE | 总资产周转率 | 1.23 |
-| operating_cash_flow_per_share | DOUBLE | 每股经营现金流 | 2.34 |
-| cash_flow_per_share | DOUBLE | 每股现金流量净额 | 1.78 |
-| book_to_market_ratio | DOUBLE | 净资产与市价比率 | 0.8901 |
-| earnings_yield | DOUBLE | 盈利收益率 | 0.0812 |
-| capitalization_ratio | DOUBLE | 股本报酬率 | 0.1345 |
-| du_return_on_equity | DOUBLE | 杜邦分析净资产收益率 | 0.1234 |
-| du_equity_multiplier | DOUBLE | 杜邦分析权益乘数 | 2.3456 |
+| code | VARCHAR | 股票代码(带后缀) | 000001.XSHE |
+| pubDate | DATE | 公司发布财报日期 | 2023-04-28 |
+| statDate | DATE | 财报统计的季度的最后一天 | 2023-03-31 |
+| eps | DOUBLE | 每股收益EPS(元) | 1.23 |
+| adjusted_profit | DOUBLE | 扣除非经常损益后的净利润(元) | 123456789.12 |
+| operating_profit | DOUBLE | 经营活动净收益(元) | 234567890.23 |
+| value_change_profit | DOUBLE | 价值变动净收益(元) | 12345678.90 |
+| roe | DOUBLE | 净资产收益率ROE(%) | 0.1234 |
+| inc_return | DOUBLE | 净资产收益率(扣除非经常损益)(%) | 0.0234 |
+| roa | DOUBLE | 总资产净利率ROA(%) | 0.0987 |
+| net_profit_margin | DOUBLE | 销售净利率(%) | 0.1234 |
+| gross_profit_margin | DOUBLE | 销售毛利率(%) | 0.3456 |
+| expense_to_total_revenue | DOUBLE | 营业总成本/营业总收入(%) | 0.7654 |
+| operation_profit_to_total_revenue | DOUBLE | 营业利润/营业总收入(%) | 0.2345 |
+| net_profit_to_total_revenue | DOUBLE | 净利润/营业总收入(%) | 0.1234 |
+| operating_expense_to_total_revenue | DOUBLE | 营业费用/营业总收入(%) | 0.0567 |
+| ga_expense_to_total_revenue | DOUBLE | 管理费用/营业总收入(%) | 0.0789 |
+| financing_expense_to_total_revenue | DOUBLE | 财务费用/营业总收入(%) | 0.0234 |
+| operating_profit_to_profit | DOUBLE | 经营活动净收益/利润总额(%) | 0.8901 |
+| invesment_profit_to_profit | DOUBLE | 价值变动净收益/利润总额(%) | 0.1099 |
+| adjusted_profit_to_profit | DOUBLE | 扣除非经常损益后的净利润/归属于母公司所有者的净利润(%) | 0.9567 |
+| goods_sale_and_service_to_revenue | DOUBLE | 销售商品提供劳务收到的现金/营业收入(%) | 1.0234 |
+| ocf_to_revenue | DOUBLE | 经营活动产生的现金流量净额/营业收入(%) | 0.1567 |
+| ocf_to_operating_profit | DOUBLE | 经营活动产生的现金流量净额/经营活动净收益(%) | 0.8901 |
+| inc_total_revenue_year_on_year | DOUBLE | 营业总收入同比增长率(%) | 0.1567 |
+| inc_total_revenue_annual | DOUBLE | 营业总收入环比增长率(%) | 0.0456 |
+| inc_revenue_year_on_year | DOUBLE | 营业收入同比增长率(%) | 0.1234 |
 
-#### 基本面数据表 (`fundamental_data`) - 基于聚宽API valuation估值数据表
+#### 估值数据表 (`valuation_data`) - 基于聚宽API valuation估值数据表
 
 | 字段名 | 类型 | 说明 | 示例 |
 |--------|------|------|------|
@@ -529,7 +731,8 @@ update:
 ```
 stock_list (股票列表)
     ├── stock_price (价格数据)
-    └── financial_data (财务数据)
+    ├── financial_data (财务数据)
+    └── user_transactions (用户交易记录)
 ```
 
 ## 🔌 API接口

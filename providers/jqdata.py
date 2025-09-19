@@ -12,7 +12,7 @@ import logging
 try:
     import jqdatasdk as jq
     from jqdatasdk import (
-    auth, get_price, get_all_securities, get_fundamentals, 
+    auth, get_price, get_all_securities, get_fundamentals, get_fundamentals_continuously,
     get_concept, get_trade_days, query, finance,
     valuation, indicator, get_mtss
 )
@@ -190,27 +190,6 @@ class JQDataSource(BaseDataSource):
             return 'bse'  # 北交所
         return 'unknown'
     
-    def get_financial_data(self, codes: List[str], start_date: date, end_date: date, 
-                          data_type: str) -> pd.DataFrame:
-        """获取财务数据"""
-        if not self.is_authenticated():
-            raise RuntimeError("请先进行认证")
-        
-        self._validate_codes(codes)
-        self._validate_date_range(start_date, end_date)
-        
-        try:
-            if data_type == DataType.INCOME_STATEMENT:
-                return self._get_income_statement_data(codes, start_date, end_date)
-            elif data_type == DataType.CASHFLOW_STATEMENT:
-                return self._get_cashflow_statement_data(codes, start_date, end_date)
-            elif data_type == DataType.BALANCE_SHEET:
-                return self._get_balance_sheet_data(codes, start_date, end_date)
-            else:
-                raise ValueError(f"不支持的财务数据类型: {data_type}")
-                
-        except Exception as e:
-            self._handle_api_error(e, f"获取{data_type}数据")
     
     def _get_income_statement_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
         """获取利润表数据"""
@@ -309,84 +288,93 @@ class JQDataSource(BaseDataSource):
         
         self._validate_date_range(start_date, end_date)
         
-        try:
-            if data_type == DataType.INDICATOR_DATA:
-                return self._get_indicator_data(start_date, end_date)
-            elif data_type == DataType.MTSS_DATA:
-                return self._get_mtss_data(codes, start_date, end_date)
-            elif data_type == DataType.PRICE_DATA:
-                return self._get_price_data(codes, start_date, end_date)
-            else:
-                raise ValueError(f"不支持的市场数据类型: {data_type}")
-                
-        except Exception as e:
-            self._handle_api_error(e, f"获取{data_type}数据")
-    
-    def get_fundamental_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """获取基本面数据"""
-        if not self.is_authenticated():
-            raise RuntimeError("请先进行认证")
-        
-        self._validate_date_range(start_date, end_date)
-        
-        try:
+        if data_type == DataType.INDICATOR_DATA:
+            return self._get_indicator_data(start_date, end_date)
+        elif data_type == DataType.VALUATION_DATA:
             return self._get_valuation_data(start_date, end_date)
-        except Exception as e:
-            self._handle_api_error(e, "获取基本面数据")
-    
-    def _get_valuation_data(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """获取估值数据"""
-        trade_days = get_trade_days(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-        
-        dfs = []
-        for idx, day in enumerate(trade_days):
-            try:
-                day_str = day.strftime("%Y-%m-%d")
-                df = get_fundamentals(query(valuation), date=day_str)
-                
-                if not df.empty:
-                    df['day'] = day_str
-                    # 转换代码格式
-                    df['code'] = df['code'].apply(self._from_jq_code)
-                    dfs.append(df)
-                
-                if idx % 100 == 0 and idx > 0:
-                    time.sleep(0.5)
-                    self.logger.info(f"已处理 {idx+1}/{len(trade_days)} 个交易日")
-                    
-            except Exception as e:
-                self.logger.error(f"获取 {day_str} 基本面数据失败: {e}")
-                continue
-        
-        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-    
+        elif data_type == DataType.MTSS_DATA:
+            return self._get_mtss_data(codes, start_date, end_date)
+        elif data_type == DataType.PRICE_DATA:
+            return self._get_price_data(codes, start_date, end_date)
+        else:
+            raise ValueError(f"不支持的市场数据类型: {data_type}")
+            
     def _get_indicator_data(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """获取技术指标数据"""
-        trade_days = get_trade_days(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        return self._get_fundamental_data(DataType.INDICATOR_DATA, start_date, end_date)
+
+    def _get_valuation_data(self, start_date: date, end_date: date) -> pd.DataFrame:
+        return self._get_fundamental_data(DataType.VALUATION_DATA, start_date, end_date)
+
+    def _get_fundamental_data(self, data_type:DataType, start_date: date, end_date: date) -> pd.DataFrame:
+        """获取财务指标数据 - 按交易日逐日获取"""
+        
+        start_str = start_date.strftime('%Y-%m-%d')
+        #start_str = '2025-09-01' #测试，
+        end_str = end_date.strftime('%Y-%m-%d')
+        self.logger.info(f"开始逐日获取{data_type}数据，日期范围: {start_str} 到 {end_str}")
         
         dfs = []
+        trade_days = get_trade_days(start_str, end_str)
+        
         for idx, day in enumerate(trade_days):
             try:
                 day_str = day.strftime("%Y-%m-%d")
-                df = get_fundamentals(query(indicator), date=day_str)
+                
+                # 创建查询对象
+                if data_type == DataType.INDICATOR_DATA:
+                    q = query(indicator)
+                elif data_type == DataType.VALUATION_DATA:
+                    q = query(valuation)
+                else:
+                    raise ValueError(f"不支持的市场数据类型: {data_type}")
+                
+                # 按日获取财务指标数据
+                df = get_fundamentals(q, date=day_str)
                 
                 if not df.empty:
-                    df['day'] = day_str
-                    df['code'] = df['code'].apply(self._from_jq_code)
+                    # 转换股票代码格式
+                    if 'code' in df.columns:
+                        df['code'] = df['code'].apply(self._from_jq_code)
+                    
+                    # 确保数值列的数据类型正确，保留原有的日期字段
+                    if data_type == DataType.INDICATOR_DATA:
+                        exclude_cols = ['code', 'pubDate', 'statDate']
+                    elif data_type == DataType.VALUATION_DATA:
+                        exclude_cols = ['code', 'day']
+                    else:
+                        exclude_cols = ['code']
+                    
+                    numeric_columns = df.select_dtypes(include=['object']).columns
+                    for col in numeric_columns:
+                        if col not in exclude_cols:
+                            try:
+                                df[col] = pd.to_numeric(df[col], errors='coerce')
+                            except Exception:
+                                pass  # 保持原始类型
+                    
                     dfs.append(df)
                 
-                if idx % 100 == 0 and idx > 0:
+                # 每处理50个交易日休息一下，并打印进度
+                if idx % 50 == 26:
                     time.sleep(0.5)
                     self.logger.info(f"已处理 {idx+1}/{len(trade_days)} 个交易日")
                     
             except Exception as e:
-                self.logger.error(f"获取 {day_str} 技术指标数据失败: {e}")
+                self.logger.error(f"获取 {day_str} {data_type}数据失败: {e}")
                 continue
         
-        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+        if dfs:
+            result_df = pd.concat(dfs, ignore_index=True)
+            self.logger.info(f"成功获取 {len(result_df)} 条{data_type}数据")
+            return result_df
+        else:
+            self.logger.warning(f"未获取到任何{data_type}数据")
+            return pd.DataFrame()
+
     
     def _get_mtss_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """获取融资融券数据"""
+        """获取融资融券数据 - 优化性能"""
+        self.logger.info(f"开始获取融资融券数据，股票数量: {len(codes)}")
         dfs = []
         
         for idx, code in enumerate(codes):
@@ -398,15 +386,18 @@ class JQDataSource(BaseDataSource):
                     df['code'] = df['code'].apply(self._from_jq_code)
                     dfs.append(df)
                 
-                if idx % 100 == 0 and idx > 0:
-                    time.sleep(0.3)
+                # 优化延迟策略：减少延迟频率和时间
+                if idx % 200 == 0 and idx > 0:
+                    time.sleep(0.1)  # 减少延迟时间
                     self.logger.info(f"已处理 {idx+1}/{len(codes)} 个股票")
                     
             except Exception as e:
                 self.logger.error(f"获取 {code} 融资融券数据失败: {e}")
                 continue
         
-        return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+        result = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+        self.logger.info(f"成功获取 {len(result)} 条融资融券数据")
+        return result
     
     def _get_price_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
         """获取价格数据（分批请求聚宽API并合并结果）"""
@@ -500,51 +491,3 @@ class JQDataSource(BaseDataSource):
         # self._authenticated = False
         self.logger.info("JQData连接已关闭")
     
-    # 便捷方法
-    def download_all_financial_data(self, codes: List[str], start_date: date, end_date: date) -> Dict[str, pd.DataFrame]:
-        """下载所有财务数据"""
-        result = {}
-        
-        financial_types = DataType.get_financial_types()
-        for data_type in financial_types:
-            self.logger.info(f"开始下载 {data_type} 数据")
-            df = self.get_financial_data(codes, start_date, end_date, data_type)
-            if not df.empty:
-                result[data_type] = df
-                self.logger.info(f"{data_type} 数据下载完成，共 {len(df)} 条记录")
-        
-        return result
-    
-    def download_all_market_data(self, codes: List[str], start_date: date, end_date: date) -> Dict[str, pd.DataFrame]:
-        """下载所有市场数据"""
-        result = {}
-        
-        # 基本面数据
-        self.logger.info("开始下载基本面数据")
-        fundamental_df = self.get_fundamental_data(codes, start_date, end_date)
-        if not fundamental_df.empty:
-            result[DataType.FUNDAMENTAL_DATA] = fundamental_df
-            self.logger.info(f"基本面数据下载完成，共 {len(fundamental_df)} 条记录")
-        
-        # 价格数据
-        self.logger.info("开始下载价格数据")
-        price_df = self.get_market_data(codes, start_date, end_date, DataType.PRICE_DATA)
-        if not price_df.empty:
-            result[DataType.PRICE_DATA] = price_df
-            self.logger.info(f"价格数据下载完成，共 {len(price_df)} 条记录")
-        
-        # 技术指标数据
-        self.logger.info("开始下载技术指标数据")
-        indicator_df = self.get_market_data(codes, start_date, end_date, DataType.INDICATOR_DATA)
-        if not indicator_df.empty:
-            result[DataType.INDICATOR_DATA] = indicator_df
-            self.logger.info(f"技术指标数据下载完成，共 {len(indicator_df)} 条记录")
-        
-        # 融资融券数据
-        self.logger.info("开始下载融资融券数据")
-        mtss_df = self.get_market_data(codes, start_date, end_date, DataType.MTSS_DATA)
-        if not mtss_df.empty:
-            result[DataType.MTSS_DATA] = mtss_df
-            self.logger.info(f"融资融券数据下载完成，共 {len(mtss_df)} 条记录")
-        
-        return result

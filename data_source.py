@@ -25,11 +25,6 @@ class DataSourceInterface(ABC):
         """获取股票列表"""
         pass
     
-    @abstractmethod
-    def get_financial_data(self, codes: List[str], start_date: date, end_date: date, 
-                          data_type: str) -> pd.DataFrame:
-        """获取财务数据"""
-        pass
     
     @abstractmethod
     def get_market_data(self, codes: List[str], start_date: date, end_date: date, 
@@ -37,11 +32,7 @@ class DataSourceInterface(ABC):
         """获取市场数据"""
         pass
     
-    @abstractmethod
-    def get_fundamental_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """获取基本面数据"""
-        pass
-    
+
     @abstractmethod
     def close(self) -> None:
         """关闭连接"""
@@ -258,10 +249,15 @@ class DataType:
     BALANCE_SHEET = 'balance_sheet'
     
     # 市场数据表
-    FUNDAMENTAL_DATA = 'fundamental_data'
+    VALUATION_DATA = 'valuation_data'
     INDICATOR_DATA = 'indicator_data'
     MTSS_DATA = 'mtss_data'
     PRICE_DATA = 'price_data'
+    
+    # 用户相关数据表
+    USER_TRANSACTIONS = 'user_transactions'
+    USER_POSITIONS = 'user_positions'
+    USER_ACCOUNT_INFO = 'user_account_info'
     
     # 其他数据类型（暂未使用）
     STOCK_INFO = 'stock_info'
@@ -275,7 +271,12 @@ class DataType:
     @classmethod
     def get_market_types(cls) -> List[str]:
         """获取市场数据类型"""
-        return [cls.FUNDAMENTAL_DATA, cls.INDICATOR_DATA, cls.MTSS_DATA, cls.PRICE_DATA]
+        return [cls.VALUATION_DATA, cls.INDICATOR_DATA, cls.MTSS_DATA, cls.PRICE_DATA]
+    
+    @classmethod
+    def get_user_tables(cls) -> List[str]:
+        """获取用户相关数据表"""
+        return [cls.USER_ACCOUNT_INFO, cls.USER_POSITIONS, cls.USER_TRANSACTIONS]
     
     @classmethod
     def get_core_tables(cls) -> List[str]:
@@ -285,7 +286,7 @@ class DataType:
     @classmethod
     def get_all_tables(cls) -> List[str]:
         """获取所有数据表"""
-        return [cls.STOCK_LIST] + cls.get_financial_types() + cls.get_market_types()
+        return [cls.STOCK_LIST] + cls.get_financial_types() + cls.get_market_types() + cls.get_user_tables()
     
     @classmethod
     def get_all_types(cls) -> List[str]:

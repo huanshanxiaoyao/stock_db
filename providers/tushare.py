@@ -37,7 +37,7 @@ class TushareDataSource(BaseDataSource):
         self.token = self._credentials.get('token', '')
         
         # 请求间隔控制
-        self.request_interval = config.get('request_interval', 0.2)
+        self.request_interval = config.get('request_interval', 0.1)
         self.last_request_time = 0
         
         # 批处理大小
@@ -222,37 +222,6 @@ class TushareDataSource(BaseDataSource):
             self.logger.error(f"获取股票列表失败: {e}")
             return []
     
-    def get_financial_data(self, codes: List[str], data_type: str, 
-                          start_date: date, end_date: date) -> Optional[pd.DataFrame]:
-        """获取财务数据 - Tushare源不支持财务数据获取
-        
-        Args:
-            codes: 股票代码列表
-            data_type: 数据类型
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            Optional[pd.DataFrame]: 返回None，不支持财务数据
-        """
-        self.logger.warning("Tushare数据源不支持财务数据获取")
-        return None
-    
-    # 财务数据获取方法已删除 - Tushare源仅支持价格数据和股票列表
-    
-    def get_fundamental_data(self, codes: List[str], start_date: date, end_date: date) -> Optional[pd.DataFrame]:
-        """获取基本面数据 - Tushare源不支持基本面数据获取
-        
-        Args:
-            codes: 股票代码列表
-            start_date: 开始日期
-            end_date: 结束日期
-            
-        Returns:
-            Optional[pd.DataFrame]: 返回None，不支持基本面数据
-        """
-        self.logger.warning("Tushare数据源不支持基本面数据获取")
-        return None
     
     def get_market_data(self, codes: List[str], start_date: date, end_date: date, 
                        data_type: str = DataType.PRICE_DATA) -> Optional[pd.DataFrame]:
@@ -343,6 +312,10 @@ class TushareDataSource(BaseDataSource):
             
             if all_data:
                 result = pd.concat(all_data, ignore_index=True)
+
+                # 为北交所股票填充复权因子数据
+                result = self._fill_bj_adjustment_factors(result, start_date, end_date)
+
                 self.logger.info(f"获取到 {len(result)} 条价格数据")
                 return result
             else:
@@ -354,6 +327,45 @@ class TushareDataSource(BaseDataSource):
             return None
     
     
+    def _fill_bj_adjustment_factors(self, df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
+        """为北交所股票填充复权因子数据"""
+
+        # 筛选出北交所股票
+        bj_stocks = df[df['code'].str.endswith('.BJ')]['code'].unique()
+
+        if len(bj_stocks) == 0:
+            return df
+
+        self.logger.info(f"开始获取 {len(bj_stocks)} 只北交所股票的复权因子数据")
+
+        # 为每只北交所股票获取复权因子
+        for code in bj_stocks:
+            self._wait_for_rate_limit()
+
+            # 调用Tushare复权因子接口
+            adj_df = self.pro.adj_factor(
+                ts_code=code,
+                start_date=start_date.strftime('%Y%m%d'),
+                end_date=end_date.strftime('%Y%m%d')
+            )
+
+            if adj_df is not None and len(adj_df) > 0:
+                # 转换日期格式以便匹配
+                adj_df['day'] = pd.to_datetime(adj_df['trade_date'], format='%Y%m%d').dt.date
+
+                # 与主数据框按code和day进行匹配更新
+                for _, adj_row in adj_df.iterrows():
+                    mask = (df['code'] == code) & (df['day'] == adj_row['day'])
+                    if mask.any():
+                        # 同时填充adj_factor和factor字段
+                        df.loc[mask, 'adj_factor'] = adj_row['adj_factor']
+                        df.loc[mask, 'factor'] = adj_row['adj_factor']  # 使用相同值填充factor
+
+                self.logger.debug(f"已更新股票 {code} 的复权因子数据，共 {len(adj_df)} 条记录")
+
+
+        return df
+
     def close(self):
         """关闭连接"""
         # 只有在明确需要关闭时才重置认证状态

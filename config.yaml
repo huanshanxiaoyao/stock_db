@@ -5,8 +5,9 @@
 database:
   # 数据库类型 (目前支持: duckdb)
   type: "duckdb"
-  # 数据库文件路径
-  path: "data/stock_data.duckdb"
+  # 数据库文件路径（相对于数据根目录）
+  # 数据根目录默认为 D:/Data/stock_db，可通过环境变量 STOCK_DATA_ROOT 修改
+  path: "stock_data.duckdb"
   # 是否启用内存数据库 (仅用于测试)
   memory_mode: false
   # 连接池大小
@@ -23,11 +24,11 @@ data_sources:
     # API配置
     api_config:
       # 请求间隔 (秒)
-      request_interval: 0.1
+      request_interval: 0.02
       # 重试次数
       max_retries: 3
       # 超时时间 (秒)
-      timeout: 30
+      timeout: 10
       # 批量大小
       batch_size: 100
     # 交易所过滤配置 (2025年7月1日起聚宽不再维护北交所数据)
@@ -56,8 +57,7 @@ stock_filter:
 update:
   # 默认更新数据类型
   default_data_types:
-    - "financial"
-    - "market"
+    - "price_data"
   # 并发更新线程数
   max_workers: 4
   # 是否启用增量更新
@@ -129,6 +129,53 @@ cache:
     port: 6379
     db: 0
     password: null
+
+# 数据质量检查配置
+data_quality:
+  # 检查阈值
+  thresholds:
+    # 价格变动限制（日涨跌幅）
+    price_change_limit: 0.5  # 50%
+    # 成交量异常倍数
+    volume_anomaly_ratio: 10
+    # NULL值比例阈值
+    null_ratio_warning: 0.1   # 10%
+    null_ratio_critical: 0.3  # 30%
+
+  # 抽样配置
+  sampling:
+    # 快速检查抽样数量
+    sample_size_quick: 100
+    # 标准检查抽样数量
+    sample_size_standard: 500
+
+  # 默认检查表配置
+  default_tables:
+    quick:
+      - "stock_list"
+      - "price_data"
+      - "user_transactions"
+      - "user_positions"
+    standard:
+      - "stock_list"
+      - "price_data"
+      - "balance_sheet"
+      - "income_statement"
+      - "cashflow_statement"
+      - "indicator_data"
+      - "valuation_data"
+      - "user_transactions"
+      - "user_positions"
+      - "user_account_info"
+
+  # 报告配置
+  reports:
+    # 输出路径
+    output_path: "logs/quality_reports"
+    # 保留历史报告天数
+    keep_history_days: 30
+    # 自动生成报告文件名
+    auto_filename: true
 
 # 性能配置
 performance:

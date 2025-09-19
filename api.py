@@ -9,11 +9,13 @@ from pathlib import Path
 
 from database import DatabaseManager
 from duckdb_impl import DuckDBDatabase
+from replica_database_wrapper import ReplicaDatabaseWrapper
 from data_source import DataSourceManager, DataSourceConfig, DataType
 from providers.jqdata import JQDataSource
 from providers.tushare import TushareDataSource
 from services.update_service import UpdateService
 from services.stock_list_service import StockListService
+from services.trade_import_service import TradeImportService
 from config import Config, get_config
 
 
@@ -21,9 +23,11 @@ def load_credentials():
     """
     从.env文件中读取jq和tushare的认证配置变量
     """
-    # 从.env文件加载配置
-    env_file = '.env'
-    if os.path.exists(env_file):
+    # 获取项目根目录（api.py所在目录）
+    project_dir = Path(__file__).parent.resolve()
+    env_file = project_dir / '.env'
+    
+    if env_file.exists():
         try:
             # 手动读取.env文件
             with open(env_file, 'r', encoding='utf-8') as f:
@@ -34,6 +38,8 @@ def load_credentials():
                         os.environ[key.strip()] = value.strip()
         except Exception as e:
             logging.warning(f"读取.env文件失败: {e}")
+    else:
+        logging.warning(f".env文件不存在: {env_file}")
     
     # 获取JQData凭证
     jq_username = os.getenv('JQ_USERNAME')
@@ -52,18 +58,31 @@ def load_credentials():
 class StockDataAPI:
     """股票数据存储平台主API类"""
     
-    def __init__(self, db_path: str = "data/stock_data.duckdb", config: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict[str, Any]] = None, use_replica: bool = True):
+        # 如果没有指定db_path，使用配置中的路径
+        if db_path is None:
+            config_obj = get_config()
+            db_path = config_obj.database.path
         """
         初始化量化数据API
         
         Args:
             db_path: 数据库文件路径
             config: 配置字典，包含数据源配置等
+            use_replica: 是否使用副本数据库模式
         """
         self.logger = logging.getLogger(__name__)
+        self.use_replica = use_replica
         
         # 初始化数据库
-        self.db = DatabaseManager(DuckDBDatabase(db_path))
+        if use_replica:
+            # 使用副本数据库包装器
+            self.db = DatabaseManager(ReplicaDatabaseWrapper(db_path))
+            self.logger.info(f"使用副本数据库模式，主数据库: {db_path}")
+        else:
+            # 使用传统的直接连接模式
+            self.db = DatabaseManager(DuckDBDatabase(db_path))
+            self.logger.info(f"使用直接连接模式，数据库: {db_path}")
         
         # 初始化数据源管理器
         self.data_sources = DataSourceManager()
@@ -73,7 +92,8 @@ class StockDataAPI:
         
         # 初始化服务
         self.stock_list_service = None
-        self.update_service = None  # 添加这行
+        self.update_service = None
+        self.trade_import_service = None
         
         # 初始化状态
         self._initialized = False
@@ -85,6 +105,7 @@ class StockDataAPI:
             self.db.initialize()
             
             # 注册数据源（如果配置中有的话）
+            self.logger.info(f"配置: {self.config}")
             if 'data_sources' in self.config:
                 self._register_data_sources(self.config['data_sources'])
             
@@ -99,6 +120,9 @@ class StockDataAPI:
             # 初始化更新服务
             self.update_service = UpdateService(self.db, self.data_sources)
             
+            # 初始化交易导入服务
+            self.trade_import_service = TradeImportService(self.db.db)
+            
             self._initialized = True
             self.logger.info("量化数据平台初始化完成")
             
@@ -110,7 +134,7 @@ class StockDataAPI:
         """注册数据源"""
         # 从.env文件获取认证信息
         credentials = load_credentials()
-        
+        self.logger.info(f"加载认证信息: {credentials}, {sources_config}")
         for source_config in sources_config:
             source_type = source_config.get('type')
             if source_type == 'jqdata':
@@ -160,41 +184,15 @@ class StockDataAPI:
         if not self._initialized:
             self.initialize()
     
-    def _filter_stock_codes(self, codes: List[str]) -> List[str]:
-        """过滤股票代码，包含所有A股市场
-        
-        Args:
-            codes: 原始股票代码列表
-        
-        Returns:
-            List[str]: 过滤后的股票代码列表（包含深交所、上交所和北交所）
-        """
-        if not codes:
-            return []
-        
-        # 过滤规则：保留深交所(.SZ)、上交所(.SH)和北交所(.BJ)的股票
-        filtered_codes = []
-        for code in codes:
-            if code.endswith('.SZ') or code.endswith('.SH') or code.endswith('.BJ'):
-                filtered_codes.append(code)
-            else:
-                # 记录被过滤的其他股票（用于调试）
-                self.logger.debug(f"过滤其他股票: {code}")
-        
-        self.logger.info(f"股票过滤完成: 原始{len(codes)}只 -> 过滤后{len(filtered_codes)}只（包含深交所、上交所和北交所）")
-        return filtered_codes
-    
     # ==================== 数据查询接口 ====================
     
     def get_stock_list(self, market: Optional[str] = None, 
-                      industry: Optional[str] = None, 
                       exchange: Optional[str] = None,
                       active_only: bool = True) -> List[str]:
         """获取股票列表
         
         Args:
             market: 市场过滤 (main/gem/star/bse)
-            industry: 行业过滤
             exchange: 交易所过滤 (XSHG/XSHE/BSE)
             active_only: 是否只返回活跃股票
         
@@ -203,22 +201,32 @@ class StockDataAPI:
         """
         self._ensure_initialized()
         
-        # 首先尝试从stock_list表获取
+        # 是否包含北交所：若显式请求 BSE（exchange='BSE' 或 market='bse'）则包含，否则默认不包含
+        include_bj = (
+            (exchange and str(exchange).upper() == 'BSE') or 
+            (market and str(market).lower() == 'bse')
+        )
+        
+        # 首先尝试从 stock_list 表获取
         if self.db.table_exists('stock_list'):
             sql = "SELECT DISTINCT code FROM stock_list"
             conditions = []
-            params = {}
+            params = []
             
             if market:
-                conditions.append("market = :market")
-                params['market'] = market
+                conditions.append("market = ?")
+                params.append(market)
             
             if exchange:
-                conditions.append("exchange = :exchange")
-                params['exchange'] = exchange
+                conditions.append("exchange = ?")
+                params.append(exchange)
                 
             if active_only:
                 conditions.append("(end_date IS NULL OR end_date > CURRENT_DATE)")
+            
+            # 默认过滤北交所，除非明确请求 BSE
+            if not include_bj:
+                conditions.append("code NOT LIKE '%.BJ'")
             
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
@@ -229,38 +237,26 @@ class StockDataAPI:
                 df = self.db.query(sql, params)
                 if not df.empty:
                     codes = df['code'].tolist()
-                    return self._filter_stock_codes(codes)
+                    return codes
+                else:
+                    return []
             except Exception as e:
                 self.logger.warning(f"从stock_list表获取股票列表失败: {e}")
         
-        # 如果有股票列表服务，尝试使用
+        # 如果有股票列表服务，尝试使用（不回退到其他业务表）
         if self.stock_list_service:
             try:
                 df = self.stock_list_service.get_active_stocks(exchange=exchange, market=market)
                 if not df.empty:
                     codes = df['code'].tolist()
-                    return self._filter_stock_codes(codes)
+                    if not include_bj:
+                        codes = [c for c in codes if not c.endswith('.BJ')]
+                    return codes
             except Exception as e:
                 self.logger.warning(f"股票列表服务获取失败: {e}")
         
-        # 回退到从数据库获取已有股票代码
-        codes = set()
-        tables = ['price_data', 'fundamental_data', 'indicator_data', 'income_statement']
-        
-        for table in tables:
-            if self.db.table_exists(table):
-                try:
-                    sql = f"SELECT DISTINCT code FROM {table} WHERE code NOT LIKE '%.BJ' LIMIT 1000"
-                    df = self.db.query(sql)
-                    if not df.empty:
-                        codes.update(df['code'].tolist())
-                        break  # 找到一个有数据的表就够了
-                except Exception as e:
-                    self.logger.warning(f"从{table}表获取股票代码失败: {e}")
-                    continue
-        
-        filtered_codes = self._filter_stock_codes(list(codes))
-        return sorted(filtered_codes)
+        # 不进行其他表回退，直接返回空列表
+        return []
     
     def update_stock_list(self, force_update: bool = False) -> bool:
         """更新股票列表
@@ -326,44 +322,58 @@ class StockDataAPI:
         
         return self.stock_list_service.get_stock_count_by_market()
     
-    def get_financial_data(self, code: str, start_date: Optional[date] = None, 
+    def get_financial_data(self, code: str, start_date: Optional[date] = None,
                           end_date: Optional[date] = None) -> pd.DataFrame:
         """获取财务数据"""
         self._ensure_initialized()
-        
-        sql = "SELECT * FROM financial_data WHERE code = ?"
-        params = {'code': code}
-        
-        if start_date:
-            sql += " AND report_date >= ?"
-            params['start_date'] = start_date
-        
-        if end_date:
-            sql += " AND report_date <= ?"
-            params['end_date'] = end_date
-        
-        sql += " ORDER BY report_date"
-        
-        return self.db.query(sql, params)
+
+        # 尝试从多个财务表获取数据
+        financial_tables = ['income_statement', 'balance_sheet', 'cashflow_statement', 'valuation_data', 'indicator_data']
+        result = {}
+
+        for table in financial_tables:
+            try:
+                sql = f"SELECT * FROM {table} WHERE code = ?"
+                params = [code]
+
+                if start_date:
+                    sql += " AND day >= ?"
+                    params.append(start_date)
+
+                if end_date:
+                    sql += " AND day <= ?"
+                    params.append(end_date)
+
+                sql += " ORDER BY day DESC LIMIT 10"
+
+                df = self.db.query(sql, params)
+                if not df.empty:
+                    result[table] = df
+            except Exception as e:
+                self.logger.debug(f"从{table}表获取数据失败: {e}")
+                continue
+
+        # 如果有数据返回字典，否则返回空DataFrame
+        return result if result else pd.DataFrame()
     
-    def get_price_data(self, code: str, start_date: Optional[date] = None, 
+    def get_price_data(self, code: str, start_date: Optional[date] = None,
                       end_date: Optional[date] = None) -> pd.DataFrame:
         """获取价格数据"""
         self._ensure_initialized()
-        
-        sql = "SELECT trade_date, open, close, high, low, volume FROM stock_price WHERE code = ?"
-        params = {'code': code}
-        
+
+        sql = "SELECT day as trade_date, open, close, high, low, volume, money, factor FROM price_data WHERE code = ?"
+        params = [code]
+
         if start_date:
-            sql += " AND trade_date >= ?"
-            params['start_date'] = start_date
-        
+            sql += " AND day >= ?"
+            params.append(start_date)
+
         if end_date:
-            sql += " AND trade_date <= ?"
-            params['end_date'] = end_date
-        
-        sql += " ORDER BY trade_date"
-        
+            sql += " AND day <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY day"
+
         return self.db.query(sql, params)
     
     def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
@@ -392,7 +402,7 @@ class StockDataAPI:
     def get_batch_stock_info(self, codes: List[str]) -> Dict[str, Dict[str, Any]]:
         """批量获取股票信息"""
         self._ensure_initialized()
-        
+
         result = {}
         for code in codes:
             try:
@@ -401,8 +411,107 @@ class StockDataAPI:
                     result[code] = info
             except Exception as e:
                 self.logger.warning(f"获取{code}股票信息失败: {e}")
-        
+
         return result
+
+    def screen_stocks(self, criteria: Dict[str, Any]) -> List[str]:
+        """筛选股票
+
+        Args:
+            criteria: 筛选条件字典，支持以下条件：
+                - market_cap_min: 最小市值
+                - market_cap_max: 最大市值
+                - pe_ratio_min: 最小市盈率
+                - pe_ratio_max: 最大市盈率
+                - pb_ratio_min: 最小市净率
+                - pb_ratio_max: 最大市净率
+                - exchange: 交易所
+                - market: 市场板块
+
+        Returns:
+            符合条件的股票代码列表
+        """
+        self._ensure_initialized()
+
+        # 构建查询SQL
+        sql = "SELECT DISTINCT code FROM valuation_data WHERE 1=1"
+        params = []
+
+        # 市值条件
+        if 'market_cap_min' in criteria:
+            sql += " AND market_cap >= ?"
+            params.append(criteria['market_cap_min'])
+        if 'market_cap_max' in criteria:
+            sql += " AND market_cap <= ?"
+            params.append(criteria['market_cap_max'])
+
+        # 市盈率条件
+        if 'pe_ratio_min' in criteria:
+            sql += " AND pe_ratio >= ?"
+            params.append(criteria['pe_ratio_min'])
+        if 'pe_ratio_max' in criteria:
+            sql += " AND pe_ratio <= ?"
+            params.append(criteria['pe_ratio_max'])
+
+        # 市净率条件
+        if 'pb_ratio_min' in criteria:
+            sql += " AND pb_ratio >= ?"
+            params.append(criteria['pb_ratio_min'])
+        if 'pb_ratio_max' in criteria:
+            sql += " AND pb_ratio <= ?"
+            params.append(criteria['pb_ratio_max'])
+
+        # 限制返回数量
+        sql += " LIMIT 100"
+
+        try:
+            df = self.db.query(sql, params)
+            if not df.empty:
+                codes = df['code'].tolist()
+
+                # 如果有交易所或市场条件，进一步过滤
+                if 'exchange' in criteria or 'market' in criteria:
+                    filtered_codes = []
+                    for code in codes:
+                        info = self.get_stock_info(code)
+                        if info:
+                            if 'exchange' in criteria and info.get('exchange') != criteria['exchange']:
+                                continue
+                            if 'market' in criteria and info.get('market') != criteria['market']:
+                                continue
+                            filtered_codes.append(code)
+                    return filtered_codes
+
+                return codes
+            else:
+                return []
+        except Exception as e:
+            self.logger.error(f"股票筛选失败: {e}")
+            return []
+
+    def calculate_financial_ratios(self, code: str) -> Dict[str, Any]:
+        """计算财务比率
+
+        Args:
+            code: 股票代码
+
+        Returns:
+            财务比率字典
+        """
+        self._ensure_initialized()
+
+        try:
+            # 从indicator_data表获取财务指标
+            sql = "SELECT * FROM indicator_data WHERE code = ? ORDER BY day DESC LIMIT 1"
+            df = self.db.query(sql, [code])
+
+            if not df.empty:
+                return df.iloc[0].to_dict()
+            else:
+                return {}
+        except Exception as e:
+            self.logger.error(f"获取{code}财务比率失败: {e}")
+            return {}
     
     # ==================== 数据更新接口 ====================
     
@@ -420,7 +529,7 @@ class StockDataAPI:
             self.logger.error(f"股票列表更新失败: {e}")
             return {'success': False, 'message': f'股票列表更新失败: {str(e)}'}
     
-    def update_data(self, codes: List[str], data_types: Optional[List[str]] = None,
+    def update_data(self, codes: List[str], data_types: List[str],
                     force_full_update: bool = False, max_workers: Optional[int] = None,
                     end_date: Optional[date] = None) -> Dict[str, Any]:
         """
@@ -435,33 +544,27 @@ class StockDataAPI:
             return {'success': False, 'message': '股票代码列表为空'}
         
         # 过滤股票代码：包含 A 股主板/创业板/科创板，排除北交所
-        filtered = self._filter_stock_codes(codes)
-        filtered = [c for c in filtered if not c.endswith('.BJ')]
+        filtered = [c for c in codes if c.endswith('.SZ') or c.endswith('.SH')]
         dropped = len(codes) - len(filtered)
         if dropped > 0:
-            self.logger.info(f"更新前过滤掉 {dropped} 只北交所股票(.BJ)")
+            self.logger.info(f"更新前过滤掉 {dropped} 只北交所或非上/深交易所股票")
         
         if not filtered:
-            return {'success': False, 'message': '过滤后无可更新的股票代码（可能全部为北交所 .BJ）'}
+            return {'success': False, 'message': '过滤后无可更新的股票代码（可能全部为北交所 .BJ 或非上/深交易所）'}
         
-        # 默认更新类别
-        if data_types is None:
-            data_types = ['financial', 'market']
+        # 检查data_types参数
+        if not data_types or len(data_types) == 0:
+            return {'success': False, 'message': 'data_types参数不能为空，请指定要更新的数据类型'}
         
-
         # 按类别更新（financial/market）
-        try:
-            result = self.update_service.update_multiple_stocks(
-                filtered,
-                data_types=data_types,
-                force_full_update=force_full_update,
-                max_workers=max_workers,
-                end_date=end_date
-            )
-            return {'success': True, 'result': result}
-        except Exception as e:
-            self.logger.error(f"更新数据失败: {e}")
-            return {'success': False, 'message': str(e)}
+        result = self.update_service.update_multiple_stocks(
+            filtered,
+            data_types=data_types,
+            force_full_update=force_full_update,
+            max_workers=max_workers,
+            end_date=end_date
+        )
+        return {'success': True, 'result': result}
     
     def update_bj_stocks_data(self, codes: List[str], data_types: Optional[List[str]] = None,
                              force_full_update: bool = False, max_workers: Optional[int] = None,
@@ -513,6 +616,27 @@ class StockDataAPI:
             return {'success': True, 'message': f'更新完成: {success_count}/{total_count} 成功', 'result': result}
         else:
             return {'success': False, 'message': '更新失败', 'result': result}
+    
+    def daily_update(self, exchange: str, data_types: List[str]) -> Dict[str, Any]:
+        """每日数据更新接口
+        
+        Args:
+            exchange: 交易所类型 ('all', 'bj', 'sh_sz')
+            data_types: 要更新的数据类型列表
+        
+        Returns:
+            Dict[str, Any]: 更新结果
+        """
+        self._ensure_initialized()
+        
+        if not self.update_service:
+            return {'success': False, 'message': '更新服务未初始化'}
+        
+        result = self.update_service.daily_update(exchange=exchange, data_types=data_types)
+        if result:
+            return {'success': True, 'result': result}
+        else:
+            return {'success': False, 'message': '每日更新失败'}
                 
     
     # ==================== 系统管理接口 ====================
@@ -544,6 +668,97 @@ class StockDataAPI:
         except Exception as e:
             self.logger.error(f"关闭连接失败: {e}")
     
+    # ==================== 交易记录相关API ====================
+    
+    def get_user_transactions(self, user_id: str = None, stock_code: str = None,
+                             trade_date: date = None, strategy_id: str = None,
+                             start_date: date = None, end_date: date = None) -> pd.DataFrame:
+        """查询用户交易记录
+        
+        Args:
+            user_id: 用户ID（账户ID）
+            stock_code: 股票代码
+            trade_date: 交易日期
+            strategy_id: 策略ID
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            交易记录DataFrame
+        """
+        self._ensure_initialized()
+        return self.db.database.get_user_transactions(
+            user_id=user_id,
+            stock_code=stock_code,
+            trade_date=trade_date,
+            strategy_id=strategy_id,
+            start_date=start_date,
+            end_date=end_date
+        )
+    
+    def get_user_positions_summary(self, user_id: str, end_date: date = None) -> pd.DataFrame:
+        """获取用户持仓汇总
+        
+        Args:
+            user_id: 用户ID（账户ID）
+            end_date: 截止日期，默认为所有交易
+            
+        Returns:
+            持仓汇总DataFrame
+        """
+        self._ensure_initialized()
+        return self.db.database.get_user_positions_summary(user_id, end_date)
+    
+    def import_trade_file(self, file_path: str) -> Dict[str, Any]:
+        """导入单个交易文件
+        
+        Args:
+            file_path: 交易文件路径
+            
+        Returns:
+            导入结果统计
+        """
+        self._ensure_initialized()
+        return self.trade_import_service.import_trade_file(file_path)
+    
+    def import_trade_directory(self, base_path: str) -> Dict[str, Any]:
+        """导入指定目录下的所有交易文件
+        
+        Args:
+            base_path: 基础路径，如 D:\\Users\\Jack\\myqmt_admin\\data\\account
+            
+        Returns:
+            导入结果汇总
+        """
+        self._ensure_initialized()
+        return self.trade_import_service.import_directory(base_path)
+    
+    def delete_user_transactions(self, user_id: str, trade_date: date = None) -> bool:
+        """删除用户交易记录
+        
+        Args:
+            user_id: 用户ID（账户ID）
+            trade_date: 交易日期，如果不指定则删除该用户所有交易记录
+            
+        Returns:
+            删除是否成功
+        """
+        self._ensure_initialized()
+        return self.db.database.delete_user_transactions(user_id, trade_date)
+    
+    def reimport_account_date(self, account_id: str, trade_date: date) -> bool:
+        """重新导入指定账户和日期的交易数据
+        
+        Args:
+            account_id: 账户ID
+            trade_date: 交易日期
+            
+        Returns:
+            重新导入是否成功
+        """
+        self._ensure_initialized()
+        return self.trade_import_service.reimport_account_date(account_id, trade_date)
+    
     def __enter__(self):
         self.initialize()
         return self
@@ -554,10 +769,14 @@ class StockDataAPI:
 
 # ==================== 便捷函数 ====================
 
-def create_api(db_path: str = "data/stock_data.duckdb", config_file: Optional[str] = None) -> StockDataAPI:
+def create_api(db_path: Optional[str] = None, config_file: Optional[str] = None) -> StockDataAPI:
     """创建API实例的便捷函数"""
     # 使用配置系统
     config_obj = get_config(config_file)
+    
+    # 如果没有指定db_path，使用配置中的路径
+    if db_path is None:
+        db_path = config_obj.database.path
     
     # 转换配置为API所需的格式
     config_dict = {
@@ -578,7 +797,7 @@ def create_api(db_path: str = "data/stock_data.duckdb", config_file: Optional[st
     return StockDataAPI(db_path, config_dict)
 
 
-def quick_query(sql: str, db_path: str = "data/stock_data.duckdb") -> pd.DataFrame:
+def quick_query(sql: str, db_path: Optional[str] = None) -> pd.DataFrame:
     """快速查询的便捷函数"""
     with create_api(db_path) as api:
         return api.query(sql)
@@ -586,7 +805,7 @@ def quick_query(sql: str, db_path: str = "data/stock_data.duckdb") -> pd.DataFra
 
 def get_stock_data(code: str, start_date: Optional[date] = None, 
                   end_date: Optional[date] = None, 
-                  db_path: str = "data/stock_data.duckdb") -> Dict[str, pd.DataFrame]:
+                  db_path: Optional[str] = None) -> Dict[str, pd.DataFrame]:
     """获取股票所有数据的便捷函数"""
     with create_api(db_path) as api:
         result = {}

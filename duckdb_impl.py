@@ -3,11 +3,13 @@
 import duckdb
 import pandas as pd
 from typing import List, Dict, Any, Optional
-from datetime import date
+from datetime import date, datetime, timedelta
 import logging
 from pathlib import Path
 import threading
 import shutil
+import glob
+import os
 
 from database import DatabaseInterface
 from models.base import BaseModel
@@ -16,7 +18,12 @@ from models.base import BaseModel
 class DuckDBDatabase(DatabaseInterface):
     """DuckDB数据库实现"""
     
-    def __init__(self, db_path: str = "data/stock_data.duckdb", snapshot_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, snapshot_path: Optional[str] = None):
+        # 如果没有指定db_path，使用配置中的路径
+        if db_path is None:
+            from config import get_config
+            config = get_config()
+            db_path = config.database.path
         self.db_path = Path(db_path)
         # 快照文件路径，默认与数据库同目录，文件名为 bak_<db_name>
         self.snapshot_path = Path(snapshot_path) if snapshot_path else (self.db_path.parent / f"bak_{self.db_path.name}")
@@ -41,23 +48,91 @@ class DuckDBDatabase(DatabaseInterface):
             raise
     
     def close(self) -> None:
-        """关闭数据库连接并在需要时进行快照"""
+        """关闭数据库连接并进行定时备份"""
         with self._lock:
             if self.conn:
                 self.conn.close()
                 self.conn = None
                 self.logger.info("数据库连接已关闭")
-            # 在连接关闭后，如果有写入发生则做一次快照
-            if self._dirty:
-                try:
-                    # 确保快照目录存在
-                    self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(self.db_path, self.snapshot_path)
-                    self.logger.info(f"检测到本次运行有数据库更新，已创建快照: {self.snapshot_path}")
-                except Exception as e:
-                    self.logger.error(f"创建数据库快照失败: {e}")
+            
+            # 执行定时备份逻辑
+            self._perform_timed_backup()
+    
+    def _perform_timed_backup(self) -> None:
+        """执行定时备份逻辑"""
+        try:
+            # 确保备份目录存在
+            backup_dir = self.db_path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 检查是否需要创建新备份
+            if self._should_create_backup(backup_dir):
+                # 创建带时间戳的备份文件名
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_filename = f"{self.db_path.stem}_backup_{timestamp}.duckdb"
+                backup_path = backup_dir / backup_filename
+                
+                # 创建备份
+                shutil.copy2(self.db_path, backup_path)
+                self.logger.info(f"已创建定时备份: {backup_path}")
+                
+                # 清理48小时前的旧备份
+                self._cleanup_old_backups(backup_dir)
             else:
-                self.logger.info("本次运行无数据库更新，跳过快照")
+                self.logger.debug("距离上次备份不足1小时，跳过备份")
+                
+        except Exception as e:
+            self.logger.error(f"定时备份失败: {e}")
+    
+    def _should_create_backup(self, backup_dir: Path) -> bool:
+        """检查是否应该创建新备份"""
+        try:
+            # 查找最新的备份文件
+            backup_pattern = f"{self.db_path.stem}_backup_*.duckdb"
+            backup_files = list(backup_dir.glob(backup_pattern))
+            
+            if not backup_files:
+                # 没有备份文件，需要创建
+                return True
+            
+            # 找到最新的备份文件
+            latest_backup = max(backup_files, key=lambda f: f.stat().st_mtime)
+            latest_backup_time = datetime.fromtimestamp(latest_backup.stat().st_mtime)
+            
+            # 检查是否超过1小时
+            time_diff = datetime.now() - latest_backup_time
+            return time_diff >= timedelta(hours=1)
+            
+        except Exception as e:
+            self.logger.error(f"检查备份时间失败: {e}")
+            return True  # 出错时默认创建备份
+    
+    def _cleanup_old_backups(self, backup_dir: Path) -> None:
+        """清理48小时前的旧备份文件"""
+        try:
+            # 计算48小时前的时间
+            cutoff_time = datetime.now() - timedelta(hours=48)
+            
+            # 查找所有备份文件
+            backup_pattern = f"{self.db_path.stem}_backup_*.duckdb"
+            backup_files = list(backup_dir.glob(backup_pattern))
+            
+            deleted_count = 0
+            for backup_file in backup_files:
+                file_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
+                if file_time < cutoff_time:
+                    try:
+                        backup_file.unlink()
+                        deleted_count += 1
+                        self.logger.debug(f"已删除旧备份: {backup_file}")
+                    except Exception as e:
+                        self.logger.warning(f"删除旧备份失败 {backup_file}: {e}")
+            
+            if deleted_count > 0:
+                self.logger.info(f"已清理 {deleted_count} 个48小时前的旧备份文件")
+                
+        except Exception as e:
+            self.logger.error(f"清理旧备份失败: {e}")
     
     def create_tables(self) -> None:
         """创建所有数据表"""
@@ -292,9 +367,9 @@ class DuckDBDatabase(DatabaseInterface):
         )
         """
         
-        # 基本面数据表 - 基于聚宽API valuation估值数据表字段
-        fundamental_data_sql = """
-        CREATE TABLE IF NOT EXISTS fundamental_data (
+        # 估值数据表 - 基于聚宽API valuation估值数据表字段
+        valuation_data_sql = """
+        CREATE TABLE IF NOT EXISTS valuation_data (
             code VARCHAR,
             day DATE,
             capitalization DOUBLE,           -- 总股本(万股)
@@ -317,63 +392,56 @@ class DuckDBDatabase(DatabaseInterface):
         )
         """
         
-        # 技术指标数据表
+        # 财务指标数据表 - 严格基于聚宽API indicator财务指标表
         indicator_data_sql = """
         CREATE TABLE IF NOT EXISTS indicator_data (
-            code VARCHAR,
-            day DATE,
+            -- 基础字段
+            code VARCHAR,  -- 股票代码 带后缀.XSHE/.XSHG
+            pubDate DATE,  -- 公司发布财报日期
+            statDate DATE,  -- 财报统计的季度的最后一天
             
-            -- 基础盈利指标
+            -- 盈利能力指标
             eps DOUBLE,  -- 每股收益EPS(元)
             adjusted_profit DOUBLE,  -- 扣除非经常损益后的净利润(元)
             operating_profit DOUBLE,  -- 经营活动净收益(元)
             value_change_profit DOUBLE,  -- 价值变动净收益(元)
-            
-            -- 盈利能力指标
             roe DOUBLE,  -- 净资产收益率ROE(%)
-            roa DOUBLE,  -- 总资产收益率ROA(%)
-            roic DOUBLE,  -- 投入资本回报率ROIC(%)
             inc_return DOUBLE,  -- 净资产收益率(扣除非经常损益)(%)
+            roa DOUBLE,  -- 总资产净利率ROA(%)
+            net_profit_margin DOUBLE,  -- 销售净利率(%)
+            gross_profit_margin DOUBLE,  -- 销售毛利率(%)
+            
+            -- 成本费用指标
+            expense_to_total_revenue DOUBLE,  -- 营业总成本/营业总收入(%)
+            operation_profit_to_total_revenue DOUBLE,  -- 营业利润/营业总收入(%)
+            net_profit_to_total_revenue DOUBLE,  -- 净利润/营业总收入(%)
+            operating_expense_to_total_revenue DOUBLE,  -- 营业费用/营业总收入(%)
+            ga_expense_to_total_revenue DOUBLE,  -- 管理费用/营业总收入(%)
+            financing_expense_to_total_revenue DOUBLE,  -- 财务费用/营业总收入(%)
             
             -- 盈利质量指标
-            gross_profit_margin DOUBLE,  -- 毛利率(%)
-            net_profit_margin DOUBLE,  -- 净利率(%)
-            operating_profit_margin DOUBLE,  -- 营业利润率(%)
-            
-            -- 偿债能力指标
-            debt_to_assets DOUBLE,  -- 资产负债率(%)
-            debt_to_equity DOUBLE,  -- 产权比率(%)
-            current_ratio DOUBLE,  -- 流动比率
-            quick_ratio DOUBLE,  -- 速动比率
-            equity_ratio DOUBLE,  -- 股东权益比率(%)
-            
-            -- 运营能力指标
-            inventory_turnover DOUBLE,  -- 存货周转率(次)
-            total_asset_turnover DOUBLE,  -- 总资产周转率(次)
-            receivable_turnover DOUBLE,  -- 应收账款周转率(次)
-            current_asset_turnover DOUBLE,  -- 流动资产周转率(次)
-            
-            -- 成长能力指标
-            inc_revenue_year_on_year DOUBLE,  -- 营业收入同比增长率(%)
-            inc_profit_year_on_year DOUBLE,  -- 净利润同比增长率(%)
-            inc_net_profit_year_on_year DOUBLE,  -- 净利润同比增长率(%)
-            inc_total_revenue_year_on_year DOUBLE,  -- 营业总收入同比增长率(%)
+            operating_profit_to_profit DOUBLE,  -- 经营活动净收益/利润总额(%)
+            invesment_profit_to_profit DOUBLE,  -- 价值变动净收益/利润总额(%)
+            adjusted_profit_to_profit DOUBLE,  -- 扣除非经常损益后的净利润/归属于母公司所有者的净利润(%)
             
             -- 现金流指标
+            goods_sale_and_service_to_revenue DOUBLE,  -- 销售商品提供劳务收到的现金/营业收入(%)
             ocf_to_revenue DOUBLE,  -- 经营活动产生的现金流量净额/营业收入(%)
             ocf_to_operating_profit DOUBLE,  -- 经营活动产生的现金流量净额/经营活动净收益(%)
             
-            -- 杜邦分析相关
-            du_return_on_equity DOUBLE,  -- 净资产收益率(杜邦分析)
-            du_asset_turnover DOUBLE,  -- 总资产周转率(杜邦分析)
-            du_equity_multiplier DOUBLE,  -- 权益乘数(杜邦分析)
+            -- 成长能力指标
+            inc_total_revenue_year_on_year DOUBLE,  -- 营业总收入同比增长率(%)
+            inc_total_revenue_annual DOUBLE,  -- 营业总收入环比增长率(%)
+            inc_revenue_year_on_year DOUBLE,  -- 营业收入同比增长率(%)
+            inc_revenue_annual DOUBLE,  -- 营业收入环比增长率(%)
+            inc_operation_profit_year_on_year DOUBLE,  -- 营业利润同比增长率(%)
+            inc_operation_profit_annual DOUBLE,  -- 营业利润环比增长率(%)
+            inc_net_profit_year_on_year DOUBLE,  -- 净利润同比增长率(%)
+            inc_net_profit_annual DOUBLE,  -- 净利润环比增长率(%)
+            inc_net_profit_to_shareholders_year_on_year DOUBLE,  -- 归母净利润同比增长率(%)
+            inc_net_profit_to_shareholders_annual DOUBLE,  -- 归母净利润环比增长率(%)
             
-            -- 其他重要指标
-            book_to_market_ratio DOUBLE,  -- 账面市值比
-            earnings_yield DOUBLE,  -- 盈利收益率
-            capitalization_ratio DOUBLE,  -- 资本化比率
-            
-            PRIMARY KEY (code, day)
+            PRIMARY KEY (code, pubDate, statDate)
         )
         """
         
@@ -445,16 +513,84 @@ class DuckDBDatabase(DatabaseInterface):
         )
         """
         
+        # 用户交易记录表
+        user_transactions_sql = """
+        CREATE TABLE IF NOT EXISTS user_transactions (
+            trade_id VARCHAR PRIMARY KEY,
+            user_id VARCHAR NOT NULL,
+            stock_code VARCHAR NOT NULL,
+            trade_date DATE NOT NULL,
+            trade_time TIMESTAMP NOT NULL,
+            trade_type INTEGER NOT NULL,
+            strategy_id VARCHAR,
+            quantity DOUBLE NOT NULL,
+            price DOUBLE NOT NULL,
+            amount DOUBLE NOT NULL,
+            commission DOUBLE DEFAULT 0,
+            stamp_tax DOUBLE DEFAULT 0,
+            other_fees DOUBLE DEFAULT 0,
+            net_amount DOUBLE NOT NULL,
+            order_id VARCHAR,
+            remark VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        
+        # 用户持仓记录表
+        user_positions_sql = """
+        CREATE TABLE IF NOT EXISTS user_positions (
+            position_id VARCHAR PRIMARY KEY,
+            user_id VARCHAR NOT NULL,
+            position_date DATE NOT NULL,
+            stock_code VARCHAR NOT NULL,
+            position_quantity INTEGER NOT NULL,
+            available_quantity INTEGER NOT NULL,
+            frozen_quantity INTEGER DEFAULT 0,
+            transit_shares INTEGER DEFAULT 0,
+            yesterday_quantity INTEGER DEFAULT 0,
+            open_price DOUBLE NOT NULL,
+            market_value DOUBLE NOT NULL,
+            current_price DOUBLE,
+            unrealized_pnl DOUBLE,
+            unrealized_pnl_ratio DOUBLE,
+            remark VARCHAR,
+            timestamp TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        
+        # 用户账户信息表
+        user_account_info_sql = """
+        CREATE TABLE IF NOT EXISTS user_account_info (
+            user_id VARCHAR NOT NULL,
+            info_date DATE NOT NULL,
+            total_assets DOUBLE NOT NULL,
+            position_market_value DOUBLE NOT NULL,
+            available_cash DOUBLE NOT NULL,
+            frozen_cash DOUBLE DEFAULT 0,
+            total_profit_loss DOUBLE,
+            total_profit_loss_ratio DOUBLE,
+            timestamp TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, info_date)
+        )
+        """
+        
         # 执行创建表的SQL
         tables = {
             'income_statement': income_statement_sql,
             'cashflow_statement': cashflow_statement_sql,
             'balance_sheet': balance_sheet_sql,
-            'fundamental_data': fundamental_data_sql,
+            'valuation_data': valuation_data_sql,
             'indicator_data': indicator_data_sql,
             'mtss_data': mtss_data_sql,
             'price_data': price_data_sql,
-            'stock_list': stock_list_sql
+            'stock_list': stock_list_sql,
+            'user_transactions': user_transactions_sql,
+            'user_positions': user_positions_sql,
+            'user_account_info': user_account_info_sql
         }
         
         for table_name, sql in tables.items():
@@ -465,6 +601,56 @@ class DuckDBDatabase(DatabaseInterface):
             except Exception as e:
                 self.logger.error(f"创建表 {table_name} 失败: {e}")
                 raise
+        
+        # 创建user_transactions表的索引
+        try:
+            with self._lock:
+                # 用户ID索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_transactions_user_id ON user_transactions(user_id)")
+                # 股票代码索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_transactions_stock_code ON user_transactions(stock_code)")
+                # 交易日期索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_transactions_trade_date ON user_transactions(trade_date)")
+                # 策略ID索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_transactions_strategy_id ON user_transactions(strategy_id)")
+                # 复合索引：用户ID + 股票代码 + 交易日期
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_transactions_composite ON user_transactions(user_id, stock_code, trade_date)")
+            self.logger.info("user_transactions表索引创建成功")
+        except Exception as e:
+            self.logger.error(f"创建user_transactions表索引失败: {e}")
+            raise
+        
+        # 创建user_positions表的索引
+        try:
+            with self._lock:
+                # 用户ID索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_positions_user_id ON user_positions(user_id)")
+                # 股票代码索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_positions_stock_code ON user_positions(stock_code)")
+                # 持仓日期索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_positions_date ON user_positions(position_date)")
+                # 复合索引：用户ID + 持仓日期
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_positions_user_date ON user_positions(user_id, position_date)")
+                # 复合索引：用户ID + 股票代码 + 持仓日期（唯一约束）
+                self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_positions_unique ON user_positions(user_id, stock_code, position_date)")
+            self.logger.info("user_positions表索引创建成功")
+        except Exception as e:
+            self.logger.error(f"创建user_positions表索引失败: {e}")
+            raise
+        
+        # 创建user_account_info表的索引
+        try:
+            with self._lock:
+                # 用户ID索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_account_info_user_id ON user_account_info(user_id)")
+                # 信息日期索引
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_account_info_date ON user_account_info(info_date)")
+                # 复合索引：用户ID + 信息日期（唯一约束）
+                self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_account_info_unique ON user_account_info(user_id, info_date)")
+            self.logger.info("user_account_info表索引创建成功")
+        except Exception as e:
+            self.logger.error(f"创建user_account_info表索引失败: {e}")
+            raise
     
     def insert_data(self, model: BaseModel) -> bool:
         """插入单条数据"""
@@ -513,31 +699,109 @@ class DuckDBDatabase(DatabaseInterface):
             return False
     
     def insert_dataframe(self, df: pd.DataFrame, table_name: str) -> bool:
-        """插入DataFrame数据"""
+        """插入DataFrame数据（显式列对齐，忽略多余列，补齐缺失列）"""
         if df.empty:
             return True
-        
-        try:
-            # 显式注册 DataFrame，避免多线程下隐式变量解析问题
-            with self._lock:
-                self.conn.register('tmp_df', df)
-                self.conn.execute(f"INSERT OR REPLACE INTO {table_name} SELECT * FROM tmp_df")
+
+        # 表存在性与结构
+        table_exists = self.table_exists(table_name)
+        if not table_exists:
+            self.logger.error(f"目标表不存在: {table_name}")
+
+        # 统一列名类型为字符串，消除重复列（保留首个）
+        df = df.copy()
+        df.columns = [str(c) for c in df.columns]
+        if df.columns.duplicated().any():
+            dup_cols = df.columns[df.columns.duplicated()].unique().tolist()
+            self.logger.warning(f"[{table_name}] DataFrame重复的列(保留第一个): {dup_cols}")
+            df = df.loc[:, ~df.columns.duplicated()]
+
+        df_cols = df.columns.tolist()
+        df_shape = df.shape
+        df_dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
+
+        table_info = self.get_table_info(table_name) if table_exists else {'columns': []}
+        table_cols = [col['name'] for col in table_info.get('columns', [])]
+        table_types = {col['name']: col['type'] for col in table_info.get('columns', [])}
+
+        # 诊断列差异
+        missing_in_df = [c for c in table_cols if c not in df_cols]      # 表需要但DF缺失
+        extra_in_df = [c for c in df_cols if c not in table_cols]        # DF多余
+
+        if not table_exists:
+            self.logger.warning(f"[{table_name}] 目标表不存在，后续插入必然失败")
+        #self.logger.info(f"[{table_name}] DataFrame形状: {df_shape}, 列数量: {len(df_cols)}")
+        #self.logger.info(f"[{table_name}] 表列数量: {len(table_cols)}")
+        if len(df_cols) != len(table_cols):
+            self.logger.warning(f"[{table_name}] 列数量不匹配: DataFrame={len(df_cols)} 列, 表={len(table_cols)} 列")
+        if missing_in_df:
+            self.logger.warning(f"[{table_name}] DataFrame缺失但表中存在的列: {missing_in_df}")
+        if extra_in_df:
+            self.logger.warning(f"[{table_name}] DataFrame多余的列(将被忽略): {extra_in_df}")
+
+        #self.logger.debug(f"[{table_name}] DataFrame列: {df_cols}")
+        #self.logger.debug(f"[{table_name}] 表列: {table_cols}")
+        #self.logger.debug(f"[{table_name}] DataFrame dtypes: {df_dtypes}")
+        #self.logger.debug(f"[{table_name}] 表列类型: {table_types}")
+
+        # 生成与表结构对齐的DataFrame
+        for col in missing_in_df:
+            df[col] = pd.NA
+        aligned_cols = table_cols if table_cols else df.columns.tolist()
+        aligned_df = df.reindex(columns=aligned_cols)
+
+        # 数据类型修复：日期字段转为date，code转str
+        date_fields = [c for c in ['day', 'pubDate', 'statDate'] if c in aligned_df.columns]
+        for c in date_fields:
+            try:
+                aligned_df[c] = pd.to_datetime(aligned_df[c], errors='coerce').dt.date
+            except Exception:
+                pass
+        if 'code' in aligned_df.columns:
+            aligned_df['code'] = aligned_df['code'].astype(str)
+
+        # 预览一行样本
+        if not aligned_df.empty:
+            preview_cols = aligned_df.columns[:min(10, len(aligned_df.columns))]
+            sample_row_preview = {k: aligned_df.iloc[0].get(k) for k in preview_cols}
+            self.logger.debug(f"[{table_name}] 对齐后DataFrame示例行(前{len(preview_cols)}列): {sample_row_preview}")
+
+        # 显式注册并按表列顺序插入
+        with self._lock:
+            self.conn.register('tmp_df', aligned_df)
+            try:
+                if table_cols:
+                    cols_escaped = ', '.join(table_cols)
+                    self.conn.execute(f"INSERT OR REPLACE INTO {table_name} ({cols_escaped}) SELECT {cols_escaped} FROM tmp_df")
+                else:
+                    # 回退：当无法获取表结构时，仍尝试按当前列顺序插入
+                    self.conn.execute(f"INSERT OR REPLACE INTO {table_name} SELECT * FROM tmp_df")
+            except Exception as e:
+                self.logger.error(f"[{table_name}] 执行插入失败: {e}")
+                self.logger.error(f"[{table_name}] 再次确认: 对齐后DataFrame列数={len(aligned_df.columns)}, 表列数={len(table_cols) if table_cols else '未知(获取失败)'}")
+                if extra_in_df:
+                    self.logger.error(f"[{table_name}] 失败时检测到的DataFrame多余列: {extra_in_df}")
+                if missing_in_df:
+                    self.logger.error(f"[{table_name}] 失败时检测到的DataFrame缺失列: {missing_in_df}")
+                raise
+            finally:
                 try:
                     self.conn.unregister('tmp_df')
                 except Exception:
-                    # 某些版本可能没有 unregister，忽略异常
                     pass
-            self.logger.info(f"成功插入 {len(df)} 条记录到表 {table_name}")
-            # 标记本次会话发生了写入
-            self._dirty = True
-            return True
-        except Exception as e:
-            self.logger.error(f"插入DataFrame到表 {table_name} 失败: {e}")
-            return False
+        self.logger.info(f"成功插入 {len(aligned_df)} 条记录到表 {table_name}")
+        self._dirty = True
+        return True
+
     
     def query_data(self, sql: str, params: Optional[Any] = None) -> pd.DataFrame:
         """执行SQL查询"""
         try:
+            # 检查是否为写入操作（DELETE、UPDATE、INSERT、CREATE、DROP、ALTER等）
+            sql_upper = sql.strip().upper()
+            is_write_operation = any(sql_upper.startswith(op) for op in 
+                                   ['DELETE', 'UPDATE', 'INSERT', 'CREATE', 'DROP', 'ALTER', 'TRUNCATE'])
+            
             if params is not None:
                 if isinstance(params, dict):
                     exec_params = list(params.values())
@@ -551,17 +815,28 @@ class DuckDBDatabase(DatabaseInterface):
             else:
                 with self._lock:
                     result = self.conn.execute(sql).fetchdf()
+            
+            # 如果是写入操作，标记为脏数据
+            if is_write_operation:
+                self._dirty = True
+                #self.logger.debug(f"检测到写入操作，已标记数据库为脏状态: {sql[:50]}...")
+            
             return result
         except Exception as e:
-            self.logger.error(f"查询数据失败: {e}")
+            self.logger.error(f"查询数据失败: {e}， sql:{sql}")
             return pd.DataFrame()
     
     def get_latest_date(self, table_name: str, code: Optional[str] = None) -> Optional[date]:
         """获取最新数据日期"""
         try:
             # 根据表类型选择日期字段
-            date_field = 'day' if table_name in ['fundamental_data', 'indicator_data', 'mtss_data', 'price_data'] else 'stat_date'
-            
+            if table_name == 'indicator_data':
+                date_field = 'pubDate'  # indicator_data表使用pubDate作为主要日期字段
+            elif table_name in ['valuation_data', 'mtss_data', 'price_data']:
+                date_field = 'day'
+            else:
+                date_field = 'stat_date'
+
             if code:
                 sql = f"SELECT MAX({date_field}) as max_date FROM {table_name} WHERE code = ?"
                 with self._lock:
@@ -570,13 +845,60 @@ class DuckDBDatabase(DatabaseInterface):
                 sql = f"SELECT MAX({date_field}) as max_date FROM {table_name}"
                 with self._lock:
                     result = self.conn.execute(sql).fetchone()
-            
+
             if result and result[0]:
                 return result[0] if isinstance(result[0], date) else date.fromisoformat(str(result[0]))
             return None
         except Exception as e:
             self.logger.error(f"获取最新日期失败: {e}")
             return None
+
+    def get_latest_dates_batch(self, table_name: str, codes: List[str]) -> Dict[str, Optional[date]]:
+        """批量获取多只股票的最新数据日期"""
+        try:
+            if not codes:
+                return {}
+
+            # 根据表类型选择日期字段
+            if table_name == 'indicator_data':
+                date_field = 'pubDate'  # indicator_data表使用pubDate作为主要日期字段
+            elif table_name in ['valuation_data', 'mtss_data', 'price_data']:
+                date_field = 'day'
+            else:
+                date_field = 'stat_date'
+
+            # 构建 IN 子句的占位符
+            placeholders = ','.join(['?' for _ in codes])
+            sql = f"""
+                SELECT code, MAX({date_field}) as max_date
+                FROM {table_name}
+                WHERE code IN ({placeholders})
+                GROUP BY code
+            """
+
+            with self._lock:
+                result = self.conn.execute(sql, codes).fetchall()
+
+            # 构建结果字典，确保所有股票都有结果
+            result_dict = {}
+
+            # 首先初始化所有股票为None
+            for code in codes:
+                result_dict[code] = None
+
+            # 然后填入查询到的日期
+            for row in result:
+                code, max_date = row
+                if max_date:
+                    result_dict[code] = max_date if isinstance(max_date, date) else date.fromisoformat(str(max_date))
+
+            self.logger.debug(f"批量查询 {table_name} 最新日期: {len(codes)} 只股票, {len([d for d in result_dict.values() if d])} 只有数据")
+            return result_dict
+
+        except Exception as e:
+            self.logger.error(f"批量获取最新日期失败: {e}")
+            # 返回所有股票都为None的字典
+            return {code: None for code in codes}
     
     def get_existing_codes(self, table_name: str) -> List[str]:
         """获取已存在的股票代码"""
@@ -622,15 +944,11 @@ class DuckDBDatabase(DatabaseInterface):
     
     def table_exists(self, table_name: str) -> bool:
         """检查表是否存在"""
-        try:
-            # 使用DuckDB的SHOW TABLES语法
-            with self._lock:
-                result = self.conn.execute("SHOW TABLES").fetchall()
-            table_names = [row[0] for row in result]
-            return table_name in table_names
-        except Exception as e:
-            self.logger.error(f"检查表存在性失败: {e}")
-            return False
+        # 使用DuckDB的SHOW TABLES语法
+        with self._lock:
+            result = self.conn.execute("SHOW TABLES").fetchall()
+        table_names = [row[0] for row in result]
+        return table_name in table_names
     
     def get_table_info(self, table_name: str) -> Dict[str, Any]:
         """获取表信息"""
@@ -663,3 +981,103 @@ class DuckDBDatabase(DatabaseInterface):
         except Exception as e:
             self.logger.error(f"获取表信息失败: {e}")
             return {'table_name': table_name, 'record_count': 0, 'columns': []}
+    
+    def get_user_transactions(self, user_id: str = None, stock_code: str = None, 
+                             trade_date: date = None, strategy_id: str = None,
+                             start_date: date = None, end_date: date = None) -> pd.DataFrame:
+        """查询用户交易记录"""
+        conditions = []
+        params = []
+        
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+        if stock_code:
+            conditions.append("stock_code = ?")
+            params.append(stock_code)
+        if trade_date:
+            conditions.append("trade_date = ?")
+            params.append(trade_date)
+        if strategy_id:
+            conditions.append("strategy_id = ?")
+            params.append(strategy_id)
+        if start_date:
+            conditions.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("trade_date <= ?")
+            params.append(end_date)
+        
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+        sql = f"SELECT * FROM user_transactions{where_clause} ORDER BY trade_time DESC"
+        
+        return self.query_data(sql, params)
+    
+    def insert_user_transactions(self, transactions: List['UserTransaction']) -> bool:
+        """批量插入用户交易记录，检查重复并记录错误日志"""
+        if not transactions:
+            return True
+        
+        try:
+            # 检查重复记录
+            duplicates = []
+            valid_transactions = []
+            
+            for transaction in transactions:
+                trade_id = transaction.trade_id
+                
+                # 检查数据库中是否已存在该trade_id（交易唯一ID）
+                check_sql = "SELECT COUNT(*) as count FROM user_transactions WHERE trade_id = ?"
+                result = self.query_data(check_sql, [trade_id])
+                
+                if not result.empty and result.iloc[0]['count'] > 0:
+                    # 记录重复的成交
+                    duplicates.append({
+                        'trade_id': trade_id,
+                        'order_id': transaction.order_id,
+                        'user_id': transaction.user_id,
+                        'stock_code': transaction.stock_code,
+                        'trade_date': transaction.trade_date,
+                        'trade_time': transaction.trade_time
+                    })
+                    self.logger.error(f"检测到重复成交，跳过插入: trade_id={trade_id}, order_id={transaction.order_id}, user_id={transaction.user_id}, stock_code={transaction.stock_code}, trade_date={transaction.trade_date}")
+                else:
+                    valid_transactions.append(transaction)
+            
+            # 插入有效的交易记录
+            if valid_transactions:
+                success = self.insert_batch(valid_transactions)
+                if success:
+                    self.logger.info(f"成功插入{len(valid_transactions)}条交易记录，跳过{len(duplicates)}条重复记录")
+                return success
+            else:
+                self.logger.warning("所有交易记录都是重复的，未插入任何数据")
+                return True  # 虽然没有插入，但不算失败
+                
+        except Exception as e:
+            self.logger.error(f"插入用户交易记录时发生错误: {e}")
+            return False
+    
+    def delete_user_transactions(self, user_id: str, trade_date: date = None) -> bool:
+        """删除用户交易记录"""
+        conditions = {'user_id': user_id}
+        if trade_date:
+            conditions['trade_date'] = trade_date
+        return self.delete_data('user_transactions', conditions)
+    
+    def get_user_positions_summary(self, user_id: str, end_date: date = None) -> pd.DataFrame:
+        """获取用户持仓汇总"""
+        date_condition = f" AND trade_date <= '{end_date}'" if end_date else ""
+        sql = f"""
+        SELECT 
+            stock_code,
+            SUM(CASE WHEN trade_type = 23 THEN quantity ELSE -quantity END) as total_quantity,
+            SUM(CASE WHEN trade_type = 23 THEN net_amount ELSE -net_amount END) as total_amount,
+            COUNT(*) as transaction_count
+        FROM user_transactions 
+        WHERE user_id = ?{date_condition}
+        GROUP BY stock_code
+        HAVING total_quantity > 0
+        ORDER BY stock_code
+        """
+        return self.query_data(sql, [user_id])
