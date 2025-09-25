@@ -17,8 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Daily account data import**: `python main.py import-account-data-daily --dates 20250903`
 
 ### API Server
-- **Start API server**: `python api_server.py --host 0.0.0.0 --port 5000`
-- **Alternative start**: `python start_api.py`
+- **Start API server**: `python api_server/server.py --host 0.0.0.0 --port 5000`
+- **Alternative start**: `python api_server/start.py`
 
 ### Testing
 - **Run all tests**: `python scripts/run_tests.py`

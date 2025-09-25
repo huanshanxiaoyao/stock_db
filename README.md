@@ -726,6 +726,73 @@ CREATE TABLE user_account_info (
 | a_cap | DOUBLE | A股总股本(万股) | 1234567.89 |
 | a_market_cap | DOUBLE | A股总市值(亿元) | 123456789012.34 |
 
+### 数据库索引汇总
+
+数据库采用分层索引策略，包括主键索引（自动创建）和业务索引（显式创建），确保查询性能。
+
+#### 主键索引（自动创建）
+
+所有表的主键会自动创建唯一索引：
+
+| 表名 | 主键 | 说明 |
+|------|------|------|
+| `stock_list` | `code` | 股票代码唯一索引 |
+| `price_data` | `code, day` | 股票代码+日期复合索引 |
+| `valuation_data` | `code, day` | 股票代码+日期复合索引 |
+| `mtss_data` | `code, day` | 股票代码+日期复合索引 |
+| `income_statement` | `code, stat_date` | 股票代码+统计日期复合索引 |
+| `cashflow_statement` | `code, stat_date` | 股票代码+统计日期复合索引 |
+| `balance_sheet` | `code, stat_date` | 股票代码+统计日期复合索引 |
+| `indicator_data` | `code, pubDate, statDate` | 股票代码+发布日期+统计日期复合索引 |
+| `user_account_info` | `user_id, info_date` | 用户ID+信息日期复合索引 |
+
+#### 业务索引（显式创建）
+
+针对高频查询场景创建的专用索引：
+
+**用户交易记录表索引**：
+```sql
+-- 单字段索引
+CREATE INDEX idx_user_transactions_user_id ON user_transactions(user_id);
+CREATE INDEX idx_user_transactions_stock_code ON user_transactions(stock_code);
+CREATE INDEX idx_user_transactions_trade_date ON user_transactions(trade_date);
+CREATE INDEX idx_user_transactions_strategy_id ON user_transactions(strategy_id);
+
+-- 复合索引（用户+股票+日期组合查询）
+CREATE INDEX idx_user_transactions_composite ON user_transactions(user_id, stock_code, trade_date);
+```
+
+**用户持仓记录表索引**：
+```sql
+-- 单字段索引
+CREATE INDEX idx_user_positions_user_id ON user_positions(user_id);
+CREATE INDEX idx_user_positions_stock_code ON user_positions(stock_code);
+CREATE INDEX idx_user_positions_date ON user_positions(position_date);
+
+-- 复合索引
+CREATE INDEX idx_user_positions_user_date ON user_positions(user_id, position_date);
+
+-- 唯一约束索引（防止重复持仓记录）
+CREATE UNIQUE INDEX idx_user_positions_unique ON user_positions(user_id, stock_code, position_date);
+```
+
+**用户账户信息表索引**：
+```sql
+-- 单字段索引
+CREATE INDEX idx_user_account_info_user_id ON user_account_info(user_id);
+CREATE INDEX idx_user_account_info_date ON user_account_info(info_date);
+
+-- 唯一约束索引（用户+日期唯一）
+CREATE UNIQUE INDEX idx_user_account_info_unique ON user_account_info(user_id, info_date);
+```
+
+#### 索引优化说明
+
+1. **查询性能**: 所有常用查询字段都有对应索引，确保毫秒级查询响应
+2. **存储效率**: 使用复合索引减少索引数量，节省存储空间
+3. **唯一性约束**: 通过唯一索引防止重复数据插入
+4. **更新性能**: 平衡查询性能和数据写入性能，避免过多索引影响更新速度
+
 ### 数据关系图
 
 ```

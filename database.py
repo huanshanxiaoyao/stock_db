@@ -119,7 +119,14 @@ class DatabaseManager:
     def initialize(self) -> None:
         """初始化数据库（创建表等）"""
         self.connect()
-        self.db.create_tables()
+
+        # 检查是否为副本数据库，如果是则跳过创建表操作
+        from replica_database_wrapper import ReplicaDatabaseWrapper
+        if isinstance(self.db, ReplicaDatabaseWrapper):
+            # 副本数据库不需要创建表，表结构从主数据库复制而来
+            pass
+        else:
+            self.db.create_tables()
     
     def save_model(self, model: BaseModel) -> bool:
         """保存数据模型"""

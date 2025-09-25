@@ -21,6 +21,9 @@ from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from werkzeug.exceptions import BadRequest, NotFound, InternalServerError
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api import StockDataAPI
 from config import get_config
 
@@ -52,24 +55,22 @@ class StockDataAPIServer:
         self.app.config['JSON_AS_ASCII'] = False
         self.app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
         
-        # 初始化数据API
-        self.data_api = None
-        
+        # 初始化数据API（立即初始化而不是延迟）
+        db_path = self.config.database.path if hasattr(self.config, 'database') else 'stock_data.duckdb'
+        self.data_api = StockDataAPI(db_path, {}, use_replica=self.use_replica)
+        self.data_api.initialize()
+
         # 设置路由
         self._setup_routes()
         self._setup_error_handlers()
-        
+
         if use_replica:
-            logger.info("股票数据API服务器初始化完成（副本模式）")
+            logger.info("股票数据API服务器初始化完成（副本模式），监控线程已启动")
         else:
             logger.info("股票数据API服务器初始化完成（直连模式）")
     
     def _get_data_api(self) -> StockDataAPI:
-        """获取数据API实例（延迟初始化）"""
-        if self.data_api is None:
-            db_path = self.config.database.path if hasattr(self.config, 'database') else 'stock_data.duckdb'
-            self.data_api = StockDataAPI(db_path, use_replica=self.use_replica)
-            self.data_api.initialize()
+        """获取数据API实例"""
         return self.data_api
     
     def _setup_routes(self):
@@ -95,12 +96,12 @@ class StockDataAPIServer:
                     'stocks': '/api/v1/stocks',
                     'price': '/api/v1/stocks/{code}/price',
                     'financial': '/api/v1/stocks/{code}/financial',
-                    'analysis': '/api/v1/analysis',
-                    'database': '/api/v1/database',
+                    'batch_prices': '/api/v1/stocks/batch/prices',
                     'transactions': '/api/v1/transactions',
                     'recent_transactions': '/api/v1/transactions/recent',
                     'positions': '/api/v1/positions',
-                    'accounts': '/api/v1/accounts'
+                    'accounts': '/api/v1/accounts',
+                    'database_info': '/api/v1/database/info'
                 }
             })
         
@@ -263,8 +264,8 @@ class StockDataAPIServer:
                     else:
                         result = {}
                 elif data_type == 'ratios':
-                    # 获取财务比率
-                    result = api.calculate_financial_ratios(code)
+                    # 财务比率功能已移除
+                    result = {}
                 else:
                     # 获取所有财务数据
                     data = api.get_financial_data(code)
@@ -406,124 +407,7 @@ class StockDataAPIServer:
                     'error': str(e)
                 }), 500
         
-        # 股票筛选
-        @self.app.route('/api/v1/analysis/screen', methods=['POST'])
-        def screen_stocks():
-            """股票筛选"""
-            try:
-                api = self._get_data_api()
-                
-                # 获取筛选条件
-                criteria = request.get_json()
-                if not criteria:
-                    return jsonify({
-                        'success': False,
-                        'error': '筛选条件不能为空'
-                    }), 400
-                
-                # 转换筛选条件格式
-                converted_criteria = {}
-                for key, value in criteria.items():
-                    if isinstance(value, dict) and 'min' in value:
-                        converted_criteria[f'{key}_min'] = value['min']
-                    if isinstance(value, dict) and 'max' in value:
-                        converted_criteria[f'{key}_max'] = value['max']
-                    if not isinstance(value, dict):
-                        converted_criteria[key] = value
-                
-                # 执行筛选
-                stock_codes = api.screen_stocks(converted_criteria)
-                
-                # 获取股票详细信息
-                results = []
-                for code in stock_codes:
-                    stock_info = api.get_stock_info(code)
-                    if stock_info:
-                        results.append(stock_info)
-                    else:
-                        results.append({'code': code, 'name': code})
-                
-                return jsonify({
-                    'success': True,
-                    'data': results,
-                    'count': len(results)
-                })
-                
-            except Exception as e:
-                logger.error(f"股票筛选失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
         
-        # 排行榜
-        @self.app.route('/api/v1/analysis/ranking', methods=['GET'])
-        def get_ranking():
-            """获取股票排行榜"""
-            try:
-                api = self._get_data_api()
-                
-                # 获取查询参数
-                metric = request.args.get('metric', 'market_cap')  # 排序指标
-                order = request.args.get('order', 'desc')  # asc, desc
-                limit = request.args.get('limit', 50, type=int)
-                market = request.args.get('market')
-                
-                # 构建SQL查询获取排行榜
-                order_clause = 'DESC' if order.lower() == 'desc' else 'ASC'
-                
-                # 根据指标构建查询
-                if metric == 'market_cap':
-                    sql = f"SELECT DISTINCT code, market_cap FROM valuation_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
-                elif metric == 'pe_ratio':
-                    sql = f"SELECT DISTINCT code, pe_ratio FROM valuation_data WHERE pe_ratio IS NOT NULL ORDER BY pe_ratio {order_clause} LIMIT ?"
-                elif metric == 'pb_ratio':
-                    sql = f"SELECT DISTINCT code, pb_ratio FROM valuation_data WHERE pb_ratio IS NOT NULL ORDER BY pb_ratio {order_clause} LIMIT ?"
-                else:
-                    # 默认按市值排序
-                    sql = f"SELECT DISTINCT code, market_cap FROM valuation_data WHERE market_cap IS NOT NULL ORDER BY market_cap {order_clause} LIMIT ?"
-                
-                # 执行查询
-                df = api.query(sql, [limit])
-                
-                if df.empty:
-                    return jsonify({
-                        'success': True,
-                        'data': [],
-                        'count': 0,
-                        'metric': metric,
-                        'order': order
-                    })
-                
-                # 获取股票详细信息
-                results = []
-                for _, row in df.iterrows():
-                    code = row['code']
-                    stock_info = api.get_stock_info(code)
-                    if stock_info:
-                        stock_info[metric] = row.get(metric)
-                        results.append(stock_info)
-                    else:
-                        results.append({
-                            'code': code,
-                            'name': code,
-                            metric: row.get(metric)
-                        })
-                
-                return jsonify({
-                    'success': True,
-                    'data': results,
-                    'count': len(results),
-                    'metric': metric,
-                    'order': order
-                })
-                
-            except Exception as e:
-                logger.error(f"获取排行榜失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
         
         # ==================== 用户交易记录相关API ====================
         
@@ -955,46 +839,6 @@ class StockDataAPIServer:
                     'error': str(e)
                 }), 500
         
-        # 自定义SQL查询
-        @self.app.route('/api/v1/database/query', methods=['POST'])
-        def execute_query():
-            """执行自定义SQL查询"""
-            try:
-                api = self._get_data_api()
-                
-                # 获取查询语句
-                data = request.get_json()
-                if not data or 'sql' not in data:
-                    return jsonify({
-                        'success': False,
-                        'error': 'SQL查询语句不能为空'
-                    }), 400
-                
-                sql = data['sql']
-                params = data.get('params', [])
-                
-                # 安全检查：只允许SELECT查询
-                if not sql.strip().upper().startswith('SELECT'):
-                    return jsonify({
-                        'success': False,
-                        'error': '只允许执行SELECT查询'
-                    }), 400
-                
-                # 执行查询
-                result = api.query(sql, params)
-                
-                return jsonify({
-                    'success': True,
-                    'data': result.to_dict('records') if not result.empty else [],
-                    'count': len(result)
-                })
-                
-            except Exception as e:
-                logger.error(f"执行查询失败: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': str(e)
-                }), 500
         
 
     

@@ -25,10 +25,10 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
     包装原始数据库接口，提供副本管理和自动重连功能。
     """
     
-    def __init__(self, 
+    def __init__(self,
                  master_db_path: str,
                  replica_db_path: Optional[str] = None,
-                 check_interval: float = 5.0):
+                 check_interval: float = 30.0):
         """
         初始化副本数据库包装器
         
@@ -64,32 +64,51 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
             master_db_path=self.master_db_path,
             replica_db_path=replica_db_path,
             check_interval=self.check_interval,
-            on_replica_updated=self._on_replica_updated
+            on_replica_updated=self._on_replica_updated,
+            on_before_replica_update=self._on_before_replica_update
         )
-    
-    def _on_replica_updated(self):
-        """副本更新时的回调函数"""
+
+    def _on_before_replica_update(self):
+        """副本更新前的回调函数 - 释放文件锁"""
         with self._lock:
-            self.logger.info("检测到副本更新，准备重连数据库...")
-            
-            # 如果当前已连接，先关闭连接
-            if self._connected and self._db_instance:
+            self.logger.debug("副本即将更新，释放旧数据库连接")
+
+            if self._db_instance:
                 try:
                     self._db_instance.close()
-                    self.logger.info("已关闭旧数据库连接")
+                    self._connected = False
+                    self.logger.debug("已释放旧数据库连接")
                 except Exception as e:
-                    self.logger.error(f"关闭旧数据库连接失败: {e}")
-            
-            # 重新创建数据库实例并连接
+                    self.logger.warning(f"释放旧数据库连接失败: {e}")
+
+    def _on_replica_updated(self):
+        """副本更新后的回调函数 - 重新连接到新副本"""
+        with self._lock:
+            self.logger.info("副本已更新，重新连接到新副本数据库...")
+
             try:
+                # 创建新的数据库实例并连接到新副本
                 replica_path = self._replica_manager.get_replica_path()
-                self._db_instance = DuckDBDatabase(replica_path)
-                self._db_instance.connect()
+                new_db_instance = DuckDBDatabase(replica_path)
+                new_db_instance.connect()
+
+                # 设置新的数据库实例
+                self._db_instance = new_db_instance
                 self._connected = True
-                self.logger.info(f"已重连到新副本数据库: {replica_path}")
+
+                self.logger.info(f"已成功重连到新副本数据库: {replica_path}")
+
             except Exception as e:
-                self.logger.error(f"重连数据库失败: {e}")
+                self.logger.error(f"重连到新副本数据库失败: {e}")
                 self._connected = False
+
+    def _safe_close_old_connection(self, old_db_instance):
+        """安全关闭旧数据库连接"""
+        try:
+            old_db_instance.close()
+            self.logger.debug("已安全关闭旧数据库连接")
+        except Exception as e:
+            self.logger.warning(f"关闭旧数据库连接失败: {e}")
     
     def _ensure_connected(self):
         """确保数据库已连接"""
@@ -138,28 +157,36 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
     # 以下方法都是对底层数据库实例的代理调用
     
     def create_tables(self) -> None:
-        """创建所有数据表"""
-        self._ensure_connected()
-        return self._db_instance.create_tables()
+        """创建所有数据表 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持创建表操作")
     
     def insert_data(self, model) -> bool:
-        """插入单条数据"""
-        self._ensure_connected()
-        return self._db_instance.insert_data(model)
-    
+        """插入单条数据 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持插入操作")
+
     def insert_batch(self, models) -> bool:
-        """批量插入数据"""
-        self._ensure_connected()
-        return self._db_instance.insert_batch(models)
-    
+        """批量插入数据 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持批量插入操作")
+
     def insert_dataframe(self, df, table_name: str) -> bool:
-        """插入DataFrame数据"""
-        self._ensure_connected()
-        return self._db_instance.insert_dataframe(df, table_name)
+        """插入DataFrame数据 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持DataFrame插入操作")
     
     def query_data(self, sql: str, params=None):
-        """执行SQL查询"""
+        """执行SQL查询 - 只读模式仅允许SELECT"""
         self._ensure_connected()
+
+        # 安全检查：只允许SELECT查询
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith('SELECT'):
+            raise RuntimeError("副本数据库为只读模式，只允许SELECT查询")
+
+        # 检查是否包含危险的SQL关键词
+        dangerous_keywords = ['DELETE', 'UPDATE', 'INSERT', 'CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'REPLACE']
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                raise RuntimeError(f"副本数据库为只读模式，不允许包含{keyword}操作的查询")
+
         return self._db_instance.query_data(sql, params)
     
     def get_latest_date(self, table_name: str, code=None):
@@ -178,14 +205,12 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
         return self._db_instance.get_existing_codes(table_name)
     
     def delete_data(self, table_name: str, conditions) -> bool:
-        """删除数据"""
-        self._ensure_connected()
-        return self._db_instance.delete_data(table_name, conditions)
-    
+        """删除数据 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持删除操作")
+
     def update_data(self, table_name: str, data, conditions) -> bool:
-        """更新数据"""
-        self._ensure_connected()
-        return self._db_instance.update_data(table_name, data, conditions)
+        """更新数据 - 只读模式禁用"""
+        raise RuntimeError("副本数据库为只读模式，不支持更新操作")
     
     def table_exists(self, table_name: str) -> bool:
         """检查表是否存在"""

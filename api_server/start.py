@@ -13,10 +13,10 @@ import logging
 from pathlib import Path
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from api_server import StockDataAPIServer
+from api_server.server import StockDataAPIServer
 
 def setup_logging(debug: bool = False):
     """设置日志配置"""
@@ -112,7 +112,7 @@ def main():
                 '--access-logfile', 'access.log',
                 '--error-logfile', 'error.log',
                 '--log-level', 'info',
-                'api_server:create_app()'
+                'api_server.server:create_app()'
             ]
             
             # 设置环境变量

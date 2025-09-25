@@ -21,8 +21,8 @@ class UpdateService:
         self.db = db_manager
         self.data_sources = data_source_manager
         self.logger = logging.getLogger(__name__)
-        self.max_workers = 2  # 并发线程数
-        self.request_delay = 0.2  # API请求间隔（秒）
+        self.max_workers = 3  # 并发线程数
+        self.request_delay = 0.1  # API请求间隔（秒）
         # 从配置读取默认历史起始日期
         cfg = get_config()
         cfg_val = getattr(getattr(cfg, 'update', None), 'default_history_start_date', None)
@@ -482,7 +482,7 @@ class UpdateService:
                               force_full_update: bool) -> Dict[str, Any]:
         """更新财务数据
         这个实现，稍后废弃，或重写，不再对财务类一起更新，一个表一个表的更新
-        _get_last_update_date 目前是已经被删除了，所有这个实现目前已经无法运行
+        _get_last_update_date 目前是已经被删除了，所有这个实现currently无法运行
         """
         results = {}
         
@@ -603,9 +603,19 @@ class UpdateService:
                     start_base = stock_info.get('start_date') or self.default_history_start_date
                     start_date = max(start_base, self.default_history_start_date)
                 end_date_used = end_date or date.today()
-
+            
             # 统一夹到今天，避免 JQData 报 结束日期 2200-01-01 不能晚于今天
             end_date_used = min(end_date_used, date.today())
+            
+            # 添加日期范围验证，避免开始日期晚于结束日期的错误
+            if start_date > end_date_used:
+                self.logger.debug(f"{code} {data_type} 数据已是最新，跳过更新 (latest: {latest}, start: {start_date}, end: {end_date_used})")
+                results[data_type] = {
+                    'records_updated': 0,
+                    'message': '数据已是最新'
+                }
+                continue
+            
             #self.logger.debug(f"{code} 获取 {data_type} 数据: {start_date} -> {end_date_used}")
             
             # 从数据源获取数据（修正：传入 end_date_used）

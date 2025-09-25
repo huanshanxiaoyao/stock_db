@@ -234,32 +234,14 @@ def action_query(args):
 def action_check_data(args):
     """执行数据质量检查"""
     try:
-        from data_quality import run_quality_check
-
-        # 解析表列表
-        tables = None
-        if args.tables:
-            tables = [t.strip() for t in args.tables.split(',')]
-
-        # 执行质量检查
-        report = run_quality_check(
-            level=args.level,
-            tables=tables,
-            output_report=args.output_report
-        )
-
-        # 根据问题严重程度设置退出码
-        if report.critical_issues > 0:
-            return 1  # 有严重问题
-        elif report.warning_issues > 0:
-            return 2  # 只有警告问题
-        else:
-            return 0  # 无问题
+        # 调用stock_actions中的实现
+        from stock_actions import action_check_data as stock_check_data
+        return stock_check_data(args)
 
     except Exception as e:
         logger.error(f"数据质量检查失败: {e}")
         logging.exception("详细错误信息:")
-        return 3  # 检查执行失败
+        return 1
 
 def main():
     """

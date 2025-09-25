@@ -414,104 +414,6 @@ class StockDataAPI:
 
         return result
 
-    def screen_stocks(self, criteria: Dict[str, Any]) -> List[str]:
-        """筛选股票
-
-        Args:
-            criteria: 筛选条件字典，支持以下条件：
-                - market_cap_min: 最小市值
-                - market_cap_max: 最大市值
-                - pe_ratio_min: 最小市盈率
-                - pe_ratio_max: 最大市盈率
-                - pb_ratio_min: 最小市净率
-                - pb_ratio_max: 最大市净率
-                - exchange: 交易所
-                - market: 市场板块
-
-        Returns:
-            符合条件的股票代码列表
-        """
-        self._ensure_initialized()
-
-        # 构建查询SQL
-        sql = "SELECT DISTINCT code FROM valuation_data WHERE 1=1"
-        params = []
-
-        # 市值条件
-        if 'market_cap_min' in criteria:
-            sql += " AND market_cap >= ?"
-            params.append(criteria['market_cap_min'])
-        if 'market_cap_max' in criteria:
-            sql += " AND market_cap <= ?"
-            params.append(criteria['market_cap_max'])
-
-        # 市盈率条件
-        if 'pe_ratio_min' in criteria:
-            sql += " AND pe_ratio >= ?"
-            params.append(criteria['pe_ratio_min'])
-        if 'pe_ratio_max' in criteria:
-            sql += " AND pe_ratio <= ?"
-            params.append(criteria['pe_ratio_max'])
-
-        # 市净率条件
-        if 'pb_ratio_min' in criteria:
-            sql += " AND pb_ratio >= ?"
-            params.append(criteria['pb_ratio_min'])
-        if 'pb_ratio_max' in criteria:
-            sql += " AND pb_ratio <= ?"
-            params.append(criteria['pb_ratio_max'])
-
-        # 限制返回数量
-        sql += " LIMIT 100"
-
-        try:
-            df = self.db.query(sql, params)
-            if not df.empty:
-                codes = df['code'].tolist()
-
-                # 如果有交易所或市场条件，进一步过滤
-                if 'exchange' in criteria or 'market' in criteria:
-                    filtered_codes = []
-                    for code in codes:
-                        info = self.get_stock_info(code)
-                        if info:
-                            if 'exchange' in criteria and info.get('exchange') != criteria['exchange']:
-                                continue
-                            if 'market' in criteria and info.get('market') != criteria['market']:
-                                continue
-                            filtered_codes.append(code)
-                    return filtered_codes
-
-                return codes
-            else:
-                return []
-        except Exception as e:
-            self.logger.error(f"股票筛选失败: {e}")
-            return []
-
-    def calculate_financial_ratios(self, code: str) -> Dict[str, Any]:
-        """计算财务比率
-
-        Args:
-            code: 股票代码
-
-        Returns:
-            财务比率字典
-        """
-        self._ensure_initialized()
-
-        try:
-            # 从indicator_data表获取财务指标
-            sql = "SELECT * FROM indicator_data WHERE code = ? ORDER BY day DESC LIMIT 1"
-            df = self.db.query(sql, [code])
-
-            if not df.empty:
-                return df.iloc[0].to_dict()
-            else:
-                return {}
-        except Exception as e:
-            self.logger.error(f"获取{code}财务比率失败: {e}")
-            return {}
     
     # ==================== 数据更新接口 ====================
     
@@ -769,7 +671,7 @@ class StockDataAPI:
 
 # ==================== 便捷函数 ====================
 
-def create_api(db_path: Optional[str] = None, config_file: Optional[str] = None) -> StockDataAPI:
+def create_api(db_path: Optional[str] = None, config_file: Optional[str] = None, use_replica: bool = False) -> StockDataAPI:
     """创建API实例的便捷函数"""
     # 使用配置系统
     config_obj = get_config(config_file)
@@ -794,7 +696,7 @@ def create_api(db_path: Optional[str] = None, config_file: Optional[str] = None)
             }
             config_dict['data_sources'].append(source_dict)
     
-    return StockDataAPI(db_path, config_dict)
+    return StockDataAPI(db_path, config_dict, use_replica=use_replica)
 
 
 def quick_query(sql: str, db_path: Optional[str] = None) -> pd.DataFrame:
