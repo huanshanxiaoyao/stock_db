@@ -1,524 +1,435 @@
-# Stock Data Platform API Documentation
+# 股票数据平台 REST API 文档
 
-## 概述
+本文档描述了股票数据平台所有可用的REST API接口，包括对7个核心数据表的支持情况。
 
-量化数据平台 REST API 提供全面的股票数据查询、分析和管理功能。API 基于 RESTful 架构，支持 JSON 格式的数据交换。
+## 服务器启动
 
-**Base URL**: `http://localhost:5000`
-**API Version**: `v1`
-**Content-Type**: `application/json`
+```bash
+# 开发环境启动
+python api_server/start.py --host 127.0.0.1 --port 5000
 
-## 目录
+# 直接启动（绕过副本模式）
+python api_server/server.py --host 127.0.0.1 --port 5000 --no-replica
+```
 
-- [系统接口](#系统接口)
-- [股票数据接口](#股票数据接口)
-- [用户交易接口](#用户交易接口)
-- [数据库接口](#数据库接口)
-- [响应格式](#响应格式)
-- [错误处理](#错误处理)
-
----
-
-## 系统接口
+## 基础端点
 
 ### 健康检查
-
-**GET** `/health`
-
-检查 API 服务器状态。
+```http
+GET /health
+```
 
 **响应示例:**
 ```json
 {
   "status": "healthy",
-  "timestamp": "2025-09-25T12:00:00",
+  "timestamp": "2025-09-29T15:23:23.427616",
   "version": "1.0.0"
 }
 ```
 
-### API 信息
-
-**GET** `/api/v1/info`
-
-获取 API 基本信息和可用端点列表。
-
-**响应示例:**
-```json
-{
-  "name": "量化数据平台API",
-  "version": "1.0.0",
-  "description": "提供股票数据查询、分析和管理功能",
-  "endpoints": {
-    "stocks": "/api/v1/stocks",
-    "price": "/api/v1/stocks/{code}/price",
-    "financial": "/api/v1/stocks/{code}/financial",
-    "batch_prices": "/api/v1/stocks/batch/prices",
-    "transactions": "/api/v1/transactions",
-    "positions": "/api/v1/positions",
-    "accounts": "/api/v1/accounts",
-    "database_info": "/api/v1/database/info"
-  }
-}
+### API信息
+```http
+GET /api/v1/info
 ```
 
----
-
-## 股票数据接口
+## 1. stock_list 表 ✅ 完全支持
 
 ### 获取股票列表
+```http
+GET /api/v1/stocks?market={market}&exchange={exchange}&active_only={bool}&limit={int}&offset={int}
+```
 
-**GET** `/api/v1/stocks`
+**参数:**
+- `market`: 市场类型（可选）
+- `exchange`: 交易所（可选）
+- `active_only`: 只显示活跃股票（默认true）
+- `limit`: 返回数量限制
+- `offset`: 分页偏移
 
-获取股票基本信息列表，支持市场筛选和分页。
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 | 默认值 |
-|------|------|------|------|---------|
-| `market` | string | 否 | 市场类型 | 全部 |
-| `exchange` | string | 否 | 交易所代码 | 全部 |
-| `active_only` | boolean | 否 | 仅活跃股票 | true |
-| `limit` | integer | 否 | 返回数量限制 | 无限制 |
-| `offset` | integer | 否 | 偏移量 | 0 |
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks?limit=3"
+```
 
 **响应示例:**
 ```json
 {
   "success": true,
   "data": [
-    {
-      "code": "000001.SZ",
-      "name": "平安银行",
-      "display_name": "平安银行",
-      "exchange": "SZ",
-      "market": "深交所"
-    }
+    {"code": "000001.SZ", "name": "平安银行", "display_name": "000001.SZ 平安银行"},
+    {"code": "000002.SZ", "name": "万科A", "display_name": "000002.SZ 万科A"},
+    {"code": "000004.SZ", "name": "国华网安", "display_name": "000004.SZ 国华网安"}
   ],
   "pagination": {
-    "total": 5000,
-    "limit": 50,
+    "total": 5152,
+    "limit": 3,
     "offset": 0,
-    "count": 50
+    "count": 3
   }
 }
 ```
 
-### 获取股票基本信息
+### 获取单个股票信息
+```http
+GET /api/v1/stocks/{code}
+```
 
-**GET** `/api/v1/stocks/{code}`
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ"
+```
 
-获取指定股票的详细基本信息。
+## 2. price_data 表 ✅ 完全支持
 
-**路径参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `code` | string | 是 | 股票代码 (如: 000001.SZ) |
+### 获取股票价格数据（支持股票代码+日期范围）
+```http
+GET /api/v1/stocks/{code}/price?start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}&fields={fields}
+```
+
+**参数:**
+- `start_date`: 开始日期（YYYY-MM-DD格式）
+- `end_date`: 结束日期（YYYY-MM-DD格式）
+- `fields`: 字段列表（逗号分隔）
+
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/price?start_date=2025-09-20&end_date=2025-09-27"
+```
 
 **响应示例:**
 ```json
 {
   "success": true,
-  "data": {
-    "code": "000001.SZ",
-    "name": "平安银行",
-    "display_name": "平安银行",
-    "exchange": "SZ",
-    "market": "深交所",
-    "industry": "银行",
-    "list_date": "1991-04-03"
-  }
-}
-```
-
-### 获取股票价格数据
-
-**GET** `/api/v1/stocks/{code}/price`
-
-获取指定股票的历史价格数据。
-
-**路径参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `code` | string | 是 | 股票代码 |
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 | 格式 |
-|------|------|------|------|------|
-| `start_date` | string | 否 | 开始日期 | YYYY-MM-DD |
-| `end_date` | string | 否 | 结束日期 | YYYY-MM-DD |
-| `fields` | string | 否 | 字段列表 | 逗号分隔 |
-
-**响应示例:**
-```json
-{
-  "success": true,
+  "count": 5,
   "data": [
     {
-      "trade_date": "2025-09-25",
-      "code": "000001.SZ",
-      "open": 12.50,
-      "high": 12.80,
-      "low": 12.30,
-      "close": 12.65,
-      "volume": 1500000,
-      "amount": 18975000
+      "trade_date": "2025-09-26T00:00:00",
+      "open": 16.39,
+      "high": 16.59,
+      "low": 16.22,
+      "close": 16.33,
+      "volume": 525548.0,
+      "money": 856917687.88,
+      "factor": 1.43324313
     }
-  ],
-  "count": 250
-}
-```
-
-### 获取股票财务数据
-
-**GET** `/api/v1/stocks/{code}/financial`
-
-获取指定股票的财务报表数据。
-
-**路径参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `code` | string | 是 | 股票代码 |
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 | 可选值 |
-|------|------|------|------|---------|
-| `type` | string | 否 | 数据类型 | summary, ratios |
-| `periods` | integer | 否 | 期数 | 默认4期 |
-
-**响应示例:**
-```json
-{
-  "success": true,
-  "data": {
-    "income_statement": [
-      {
-        "pub_date": "2025-03-31",
-        "revenue": 50000000000,
-        "net_profit": 8000000000
-      }
-    ],
-    "balance_sheet": [...],
-    "cashflow_statement": [...]
-  }
+  ]
 }
 ```
 
 ### 批量获取价格数据
+```http
+POST /api/v1/stocks/batch/prices
+Content-Type: application/json
 
-**POST** `/api/v1/stocks/batch/prices`
-
-批量获取多只股票的价格数据。
-
-**请求体:**
-```json
 {
   "codes": ["000001.SZ", "000002.SZ"],
-  "start_date": "2025-09-01",
-  "end_date": "2025-09-25",
+  "start_date": "2025-09-20",
+  "end_date": "2025-09-27",
   "fields": ["open", "high", "low", "close", "volume"]
 }
 ```
 
-**响应示例:**
-```json
-{
-  "success": true,
-  "data": {
-    "000001.SZ": [
-      {
-        "trade_date": "2025-09-25",
-        "open": 12.50,
-        "close": 12.65
-      }
-    ],
-    "000002.SZ": [...]
-  }
-}
+**请求示例:**
+```bash
+curl -X POST "http://127.0.0.1:5000/api/v1/stocks/batch/prices" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codes": ["000001.SZ", "000002.SZ"],
+    "start_date": "2025-09-20",
+    "end_date": "2025-09-27"
+  }'
 ```
 
+## 3. valuation_data 表 ✅ 完全支持
 
----
-
-## 用户交易接口
-
-### 获取交易记录
-
-**GET** `/api/v1/transactions`
-
-获取用户交易记录。
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `user_id` | string | 是 | 用户ID |
-| `account_id` | string | 否 | 账户ID |
-| `start_date` | string | 否 | 开始日期 |
-| `end_date` | string | 否 | 结束日期 |
-| `stock_code` | string | 否 | 股票代码 |
-| `limit` | integer | 否 | 返回数量 |
-
-**响应示例:**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "trade_id": "T20250925001",
-      "user_id": "123456789",
-      "account_id": "ACC001",
-      "stock_code": "000001.SZ",
-      "trade_date": "2025-09-25",
-      "trade_type": "buy",
-      "quantity": 1000,
-      "price": 12.50,
-      "amount": 12500.00,
-      "commission": 7.50
-    }
-  ],
-  "count": 50
-}
+### 获取估值数据（支持股票代码+日期范围）
+```http
+GET /api/v1/stocks/{code}/financial?type=valuation&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}
 ```
 
-### 获取持仓记录
-
-**GET** `/api/v1/positions`
-
-获取用户持仓记录。
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `user_id` | string | 是 | 用户ID |
-| `account_id` | string | 否 | 账户ID |
-| `date` | string | 否 | 查询日期 |
-| `stock_code` | string | 否 | 股票代码 |
-
-**响应示例:**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "user_id": "123456789",
-      "account_id": "ACC001",
-      "stock_code": "000001.SZ",
-      "stock_name": "平安银行",
-      "position_date": "2025-09-25",
-      "quantity": 2000,
-      "avg_cost": 12.30,
-      "market_value": 25300.00,
-      "unrealized_pnl": 700.00
-    }
-  ],
-  "count": 10
-}
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=valuation&start_date=2025-09-20&end_date=2025-09-27"
 ```
-
-### 持仓汇总
-
-**GET** `/api/v1/positions/summary`
-
-获取用户持仓汇总信息。
-
-**查询参数:**
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `user_id` | string | 是 | 用户ID |
-| `account_id` | string | 否 | 账户ID |
 
 **响应示例:**
 ```json
 {
   "success": true,
   "data": {
-    "total_market_value": 125000.00,
-    "total_cost": 120000.00,
-    "total_pnl": 5000.00,
-    "total_pnl_ratio": 0.0417,
-    "position_count": 8,
-    "top_holdings": [
+    "valuation_data": [
       {
-        "stock_code": "000001.SZ",
-        "weight": 0.35,
-        "pnl_ratio": 0.05
+        "code": "000001.SZ",
+        "day": "2025-09-26T00:00:00",
+        "pe_ratio": 5.0858,
+        "pb_ratio": 0.5027,
+        "market_cap": 2212.2747,
+        "turnover_ratio": 0.3985
       }
     ]
   }
 }
 ```
 
----
+## 4. indicator_data 表 ✅ 完全支持
 
-## 数据库接口
+### 获取指标数据（支持股票代码+日期范围）
+```http
+GET /api/v1/stocks/{code}/financial?type=indicator&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}
+```
 
-### 数据库信息
-
-**GET** `/api/v1/database/info`
-
-获取数据库基本信息和统计数据。
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=indicator&start_date=2025-06-01&end_date=2025-09-30"
+```
 
 **响应示例:**
 ```json
 {
   "success": true,
   "data": {
-    "database_size": "2.5GB",
-    "table_count": 15,
-    "stock_count": 5000,
-    "last_update": "2025-09-25T08:00:00"
+    "indicator_data": [
+      {
+        "code": "000001.SZ",
+        "statDate": "2025-09-10T00:00:00",
+        "pubDate": "2025-09-10T00:00:00",
+        "eps": 0.5552,
+        "roe": 2.12,
+        "roa": 0.18,
+        "gross_profit_margin": null,
+        "net_profit_margin": 30.2
+      }
+    ]
   }
 }
 ```
 
+## 5. user_transactions 表 ✅ 完全支持
 
----
+### 获取用户交易记录（支持user_id+日期范围 或 股票代码+日期范围）
+```http
+GET /api/v1/transactions?user_id={user_id}&stock_code={code}&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}&trade_type={int}&limit={int}&offset={int}
+```
 
-## 响应格式
+**参数:**
+- `user_id`: 用户ID
+- `stock_code`: 股票代码
+- `start_date`: 开始日期
+- `end_date`: 结束日期
+- `trade_type`: 交易类型（1=买入，2=卖出）
+- `limit`: 返回数量限制（默认100）
+- `offset`: 分页偏移
 
-所有 API 响应都遵循统一的 JSON 格式：
+**请求示例:**
+```bash
+# 查询指定用户的交易记录
+curl "http://127.0.0.1:5000/api/v1/transactions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30&limit=5"
 
-### 成功响应
+# 查询指定股票的所有交易记录
+curl "http://127.0.0.1:5000/api/v1/transactions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
+
+# 查询指定用户指定股票的交易记录
+curl "http://127.0.0.1:5000/api/v1/transactions?user_id=test_user&stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
+```
+
+### 获取用户最近N天交易记录
+```http
+GET /api/v1/transactions/recent?user_id={user_id}&days={int}&stock_code={code}&trade_type={int}&limit={int}
+```
+
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/transactions/recent?user_id=test_user&days=7&limit=10"
+```
+
+**响应示例:**
 ```json
 {
   "success": true,
-  "data": {}, // 或 []
-  "count": 100,     // 可选：数据数量
-  "pagination": {}  // 可选：分页信息
-}
-```
-
-### 错误响应
-```json
-{
-  "success": false,
-  "error": "错误描述",
-  "code": "ERROR_CODE"  // 可选：错误代码
-}
-```
-
-## 错误处理
-
-### HTTP 状态码
-
-| 状态码 | 描述 |
-|--------|------|
-| 200 | 请求成功 |
-| 400 | 请求参数错误 |
-| 404 | 资源不存在 |
-| 500 | 服务器内部错误 |
-
-### 常见错误示例
-
-**参数错误 (400):**
-```json
-{
-  "success": false,
-  "error": "参数错误: start_date 格式不正确"
-}
-```
-
-**资源不存在 (404):**
-```json
-{
-  "success": false,
-  "error": "股票 INVALID.CODE 不存在"
-}
-```
-
-**服务器错误 (500):**
-```json
-{
-  "success": false,
-  "error": "数据库连接失败"
-}
-```
-
----
-
-## 使用示例
-
-### Python 客户端示例
-
-```python
-import requests
-
-# 基础配置
-BASE_URL = "http://localhost:5000"
-headers = {"Content-Type": "application/json"}
-
-# 获取股票列表
-response = requests.get(f"{BASE_URL}/api/v1/stocks?limit=10")
-stocks = response.json()
-
-# 获取价格数据
-code = "000001.SZ"
-params = {
-    "start_date": "2025-09-01",
-    "end_date": "2025-09-25"
-}
-response = requests.get(f"{BASE_URL}/api/v1/stocks/{code}/price", params=params)
-price_data = response.json()
-
-# 批量查询
-payload = {
-    "codes": ["000001.SZ", "000002.SZ"],
-    "start_date": "2025-09-20"
-}
-response = requests.post(f"{BASE_URL}/api/v1/stocks/batch/prices",
-                        json=payload, headers=headers)
-batch_data = response.json()
-
-# 获取用户交易记录
-params = {
-    "user_id": "123456789",
-    "limit": 50
-}
-response = requests.get(f"{BASE_URL}/api/v1/transactions", params=params)
-transactions = response.json()
-```
-
-### JavaScript 客户端示例
-
-```javascript
-const BASE_URL = "http://localhost:5000";
-
-// 获取股票信息
-async function getStockInfo(code) {
-  try {
-    const response = await fetch(`${BASE_URL}/api/v1/stocks/${code}`);
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('获取股票信息失败:', error);
-  }
-}
-
-// 批量获取价格数据
-async function getBatchPrices(codes, startDate) {
-  try {
-    const response = await fetch(`${BASE_URL}/api/v1/stocks/batch/prices`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        codes: codes,
-        start_date: startDate
-      })
-    });
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('批量查询失败:', error);
+  "data": [
+    {
+      "user_id": "test_user",
+      "stock_code": "000001.SZ",
+      "trade_date": "2025-09-25",
+      "trade_time": "09:30:00",
+      "trade_type": 1,
+      "price": 16.35,
+      "quantity": 1000,
+      "amount": 16350.0,
+      "commission": 5.0,
+      "stamp_tax": 0.0
+    }
+  ],
+  "pagination": {
+    "total": 1,
+    "limit": 10,
+    "offset": 0,
+    "count": 1
   }
 }
 ```
 
----
+## 6. user_positions 表 ✅ 完全支持
 
-## 版本信息
+### 获取用户持仓记录（支持user_id+日期范围 或 股票代码+日期范围）
+```http
+GET /api/v1/positions?user_id={user_id}&stock_code={code}&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}&limit={int}&offset={int}
+```
 
-**当前版本**: v1.0.0
-**最后更新**: 2025-09-25
-**维护状态**: 活跃开发中
+**请求示例:**
+```bash
+# 查询指定用户的持仓记录
+curl "http://127.0.0.1:5000/api/v1/positions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
 
-## 技术支持
+# 查询指定股票的所有持仓记录
+curl "http://127.0.0.1:5000/api/v1/positions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
 
-如有问题或建议，请联系开发团队或查看项目文档。
+# 查询指定用户指定股票的持仓记录
+curl "http://127.0.0.1:5000/api/v1/positions?user_id=test_user&stock_code=000001.SZ&position_date=2025-09-26"
+```
+
+### 获取用户持仓汇总
+```http
+GET /api/v1/positions/summary?user_id={user_id}&position_date={YYYY-MM-DD}
+```
+
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/positions/summary?user_id=test_user"
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "test_user",
+    "position_date": "2025-09-26",
+    "summary": {
+      "total_positions": 5,
+      "unique_stocks": 5,
+      "total_quantity": 10000,
+      "total_market_value": 163500.0,
+      "total_unrealized_pnl": 1500.0,
+      "avg_pnl_ratio": 0.92
+    },
+    "top_positions": [
+      {
+        "stock_code": "000001.SZ",
+        "stock_name": "平安银行",
+        "current_quantity": 2000,
+        "market_value": 32700.0,
+        "unrealized_pnl": 300.0,
+        "unrealized_pnl_ratio": 0.93
+      }
+    ]
+  }
+}
+```
+
+## 7. user_account_info 表 ✅ 完全支持
+
+### 获取用户账户信息（支持user_id+日期范围）
+```http
+GET /api/v1/accounts?user_id={user_id}&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}&limit={int}&offset={int}
+```
+
+**请求示例:**
+```bash
+# 查询指定用户的账户信息
+curl "http://127.0.0.1:5000/api/v1/accounts?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
+
+# 查询指定日期的账户信息
+curl "http://127.0.0.1:5000/api/v1/accounts?user_id=test_user&info_date=2025-09-26"
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "user_id": "test_user",
+      "info_date": "2025-09-26",
+      "total_asset": 200000.0,
+      "available_cash": 36500.0,
+      "market_value": 163500.0,
+      "frozen_cash": 0.0,
+      "total_profit_loss": 1500.0,
+      "profit_loss_ratio": 0.75
+    }
+  ],
+  "pagination": {
+    "total": 1,
+    "limit": null,
+    "offset": 0,
+    "count": 1
+  }
+}
+```
+
+## 综合财务数据查询
+
+### 获取所有财务数据
+```http
+GET /api/v1/stocks/{code}/financial?type=summary&start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}
+```
+
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=summary"
+```
+
+**响应包含:**
+- `valuation_data`: 估值数据
+- `indicator_data`: 财务指标数据
+- `income_statement`: 利润表数据
+- `balance_sheet`: 资产负债表数据
+- `cashflow_statement`: 现金流量表数据
+
+## 数据库信息
+
+### 获取数据库统计信息
+```http
+GET /api/v1/database/info
+```
+
+**请求示例:**
+```bash
+curl "http://127.0.0.1:5000/api/v1/database/info"
+```
+
+## 支持状况总结
+
+| 表名 | user_id+日期范围 | 股票代码+日期范围 | 状态 |
+|------|------------------|-------------------|------|
+| stock_list | N/A | ⚠️ 部分支持 | 缺少日期范围筛选 |
+| price_data | N/A | ✅ 完全支持 | 完整实现 |
+| valuation_data | N/A | ✅ 完全支持 | 完整实现 |
+| indicator_data | N/A | ✅ 完全支持 | 完整实现 |
+| user_transactions | ✅ 完全支持 | ✅ 完全支持 | 完整实现 |
+| user_positions | ✅ 完全支持 | ✅ 完全支持 | 完整实现 |
+| user_account_info | ✅ 完全支持 | N/A | 完整实现 |
+
+## 注意事项
+
+1. **日期格式**: 所有日期参数使用 `YYYY-MM-DD` 格式
+2. **分页**: 大部分接口支持 `limit` 和 `offset` 参数进行分页
+3. **错误处理**: 所有接口返回统一的错误格式：
+   ```json
+   {
+     "success": false,
+     "error": "错误描述"
+   }
+   ```
+4. **数据类型**: JSON响应中的数值类型已正确转换，避免序列化错误 ✅ **已修复**
+5. **性能**: 建议在查询大量数据时使用分页参数
+6. **服务器端口**: 使用端口5000启动API服务器（修复版本）
+
+## 缺少的功能
+
+1. **stock_list表的日期范围查询**: 需要添加按上市日期、退市日期的筛选功能
+2. **批量财务数据查询**: 对valuation_data和indicator_data的批量查询接口
+
+这些功能可在后续版本中添加。

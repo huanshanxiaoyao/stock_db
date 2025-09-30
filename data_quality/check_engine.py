@@ -324,7 +324,7 @@ class CheckEngine:
     def _calculate_stock_completeness(self, table_name: str, code: str, start_date, end_date) -> float:
         """计算单只股票的数据完整性比率"""
         try:
-            from date_utils import get_trading_days, get_last_trading_day
+            from common.date_utils import get_trading_days, get_last_trading_day
             from datetime import datetime
 
             # 确定检查的时间范围

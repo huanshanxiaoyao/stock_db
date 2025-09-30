@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from api import create_api
 from data_source import DataType
 from services.update_service import UpdateService
-from date_utils import get_trading_days, get_last_trading_day
+from common.date_utils import get_trading_days, get_last_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -28,41 +28,59 @@ def action_daily(args):
     """每日数据更新"""
     logger = logging.getLogger(__name__)
     logger.info("开始每日数据更新")
-    
+
     try:
         # 使用 create_api 创建API实例（推荐方式）
         api = create_api(db_path=args.db_path)
         api.initialize()
-        
+
+        # 解析目标日期参数
+        target_date = None
+        if args.target_date:
+            try:
+                from datetime import datetime
+                target_date = datetime.strptime(args.target_date, '%Y%m%d').date()
+                logger.info(f"指定更新日期: {target_date}")
+            except ValueError:
+                logger.error(f"日期格式错误: {args.target_date}，应为YYYYMMDD格式，如：20250630")
+                return
+
         # 解析表类型参数
         data_types = None
         if args.tables:
             # 解析用户指定的表类型
             table_list = [t.strip() for t in args.tables.split(',')]
             data_types = []
-            
+
             for table in table_list:
                 if table not in SUPPORTED_TABLES:
                     logger.warning(f"不支持的表类型: {table}")
                     continue
-                    
+
                 # 将具体表名映射到数据类型
                 if table in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data']:
                     data_types.append(table)
-                    
+
             if not data_types:
                 logger.error("没有有效的表类型，使用默认的市场数据更新")
                 return
-        
+
         # 确定交易所类型
         exchange = 'bj' if args.bj_stocks else 'all'
-        
-        logger.info(f"准备进行{'北交所' if args.bj_stocks else '所有'}股票的每日更新")
+
+        if target_date:
+            logger.info(f"准备进行{'北交所' if args.bj_stocks else '所有'}股票在 {target_date} 的数据更新")
+        else:
+            logger.info(f"准备进行{'北交所' if args.bj_stocks else '所有'}股票的每日增量更新")
+
         if data_types:
             logger.info(f"更新数据类型: {', '.join(data_types)}")
-        
-        # 通过API层调用每日更新
-        result = api.daily_update(exchange=exchange, data_types=data_types)
+
+        # 通过API层调用更新
+        if target_date:
+            result = api.daily_update(exchange=exchange, data_types=data_types, target_date=target_date)
+        else:
+            result = api.daily_update(exchange=exchange, data_types=data_types)
         
         # 处理返回结果
         if result.get('success'):
@@ -267,6 +285,104 @@ def action_update_stock_list(args):
     finally:
         api.close()
 
+def send_feishu_quality_report(report, check_type="数据质量检查"):
+    """
+    发送数据质量报告到飞书
+
+    Args:
+        report: QualityReport对象
+        check_type: 检查类型描述
+    """
+    try:
+        from common.feishu_client import FeishuWebhookBot
+        import os
+        from datetime import datetime
+
+        # 获取飞书配置
+        webhook_url = os.getenv('FEISHU_WEBHOOK_URL')
+        secret = os.getenv('FEISHU_SECRET')
+
+        if not webhook_url:
+            logger.warning("未配置飞书Webhook URL，跳过飞书通知")
+            return False
+
+        # 创建飞书客户端
+        feishu_bot = FeishuWebhookBot(webhook_url, secret)
+
+        # 构建富文本消息内容
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 确定消息颜色和状态
+        if report.critical_issues > 0:
+            status_emoji = "🔴"
+            status_text = "发现严重问题"
+        elif report.warning_issues > 0:
+            status_emoji = "🟡"
+            status_text = "发现警告问题"
+        else:
+            status_emoji = "🟢"
+            status_text = "检查通过"
+
+        # 构建富文本内容 - 简化格式
+        content = [
+            # 标题行
+            [
+                {"tag": "text", "text": f"{status_emoji} {check_type}报告"}
+            ],
+            # 基本信息合并到一行
+            [
+                {"tag": "text", "text": f"📅 检查时间: {current_time}\n⏱️ 检查时长: {report.summary.get('check_duration_seconds', 0):.1f}秒\n📊 检查表数: {len(report.tables_checked)}\n🔍 总问题数: {report.total_issues}"}
+            ]
+        ]
+
+        # 如果有问题，添加详细统计
+        if report.total_issues > 0:
+            problem_text = f"\n❌ 严重问题: {report.critical_issues}个\n⚠️ 警告问题: {report.warning_issues}个"
+
+            # 按表统计问题
+            table_stats = report.summary.get('table_stats', {})
+            if table_stats:
+                problem_text += "\n\n📋 问题分布:"
+                for table, stats in table_stats.items():
+                    total_table_issues = stats.get('critical', 0) + stats.get('warning', 0) + stats.get('info', 0)
+                    if total_table_issues > 0:
+                        problem_text += f"\n• {table}: {total_table_issues}个 (严重:{stats.get('critical', 0)}, 警告:{stats.get('warning', 0)})"
+
+            # 显示前3个最重要的问题
+            critical_issues = [issue for issue in report.issues if issue.severity == 'critical']
+            warning_issues = [issue for issue in report.issues if issue.severity == 'warning']
+            important_issues = critical_issues[:2] + warning_issues[:1]  # 最多显示3个问题
+
+            if important_issues:
+                problem_text += "\n\n🚨 主要问题:"
+                for issue in important_issues:
+                    severity_emoji = "❌" if issue.severity == 'critical' else "⚠️"
+                    problem_text += f"\n{severity_emoji} [{issue.table}] {issue.description}"
+
+            content.append([
+                {"tag": "text", "text": problem_text}
+            ])
+        else:
+            content.append([
+                {"tag": "text", "text": "\n✅ 未发现数据质量问题，数据状态良好！"}
+            ])
+
+        # 发送消息
+        title = f"股票数据库{check_type}报告 - {status_text}"
+        result = feishu_bot.send_rich_text(content, title)
+
+        if result.get('code') == 0:
+            logger.info("飞书通知发送成功")
+            return True
+        else:
+            logger.error(f"飞书通知发送失败: {result.get('msg', '未知错误')}")
+            return False
+
+    except Exception as e:
+        logger.error(f"发送飞书通知时出错: {e}")
+        return False
+
+
 def action_check_data(args):
     """
     数据质量检查
@@ -279,11 +395,21 @@ def action_check_data(args):
     level = getattr(args, 'level', 'quick')
     tables = getattr(args, 'tables', None)
     output_report = getattr(args, 'output_report', None)
+    daily_routine = getattr(args, 'daily_routine', False)
+    recent_days = getattr(args, 'recent_days', 3)
+    historical_sample_days = getattr(args, 'historical_sample_days', 30)
+    no_feishu = getattr(args, 'no_feishu', False)
 
     if tables:
         tables = [t.strip() for t in tables.split(',')]
 
-    logger.info(f"开始{level}级别数据质量检查...")
+    # 确定检查类型
+    if daily_routine:
+        logger.info(f"开始日常例行数据质量检查...")
+        logger.info(f"- 最近{recent_days}个交易日全量检查")
+        logger.info(f"- 历史{historical_sample_days}个交易日抽样检查")
+    else:
+        logger.info(f"开始{level}级别数据质量检查...")
 
     api = create_api(db_path=args.db_path)
 
@@ -294,11 +420,22 @@ def action_check_data(args):
         quality_service = DataQualityService(api)
 
         # 执行检查
-        report = quality_service.check_data_quality(level=level, tables=tables)
+        if daily_routine:
+            report = quality_service.daily_routine_check(
+                recent_days=recent_days,
+                historical_sample_days=historical_sample_days
+            )
+        else:
+            report = quality_service.check_data_quality(level=level, tables=tables)
 
         # 输出检查结果摘要
         logger.info(f"\n=== 数据质量检查报告 ===")
-        logger.info(f"检查级别: {report.check_level}")
+        if daily_routine:
+            logger.info(f"检查类型: 日常例行检查")
+            logger.info(f"最近交易日: {report.summary.get('recent_days_checked', recent_days)}天")
+            logger.info(f"历史抽样: {report.summary.get('historical_sample_days', historical_sample_days)}天")
+        else:
+            logger.info(f"检查级别: {report.check_level}")
         logger.info(f"检查时长: {report.summary.get('check_duration_seconds', 0):.1f}秒")
         logger.info(f"检查表数: {len(report.tables_checked)}")
         logger.info(f"发现问题: {report.total_issues}个")
@@ -315,6 +452,18 @@ def action_check_data(args):
                     total_table_issues = stats.get('critical', 0) + stats.get('warning', 0) + stats.get('info', 0)
                     logger.info(f"  {table}: {total_table_issues}个问题 "
                               f"(严重:{stats.get('critical', 0)}, 警告:{stats.get('warning', 0)})")
+
+            # 显示问题明细
+            logger.info(f"\n问题明细:")
+            for issue in report.issues:
+                severity_prefix = "❌" if issue.severity == 'critical' else "⚠️" if issue.severity == 'warning' else "ℹ️"
+                logger.info(f"  {severity_prefix} [{issue.table}] {issue.description}")
+                if issue.samples:
+                    samples_str = ", ".join(issue.samples[:3])  # 显示前3个样本
+                    sample_count = len(issue.samples)
+                    if sample_count > 3:
+                        samples_str += f" (共{sample_count}个样本)"
+                    logger.info(f"     样本: {samples_str}")
 
             # 按类别统计问题
             category_stats = report.summary.get('category_stats', {})
@@ -335,6 +484,27 @@ def action_check_data(args):
                 json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
 
             logger.info(f"\n详细报告已保存到: {output_report}")
+        else:
+            # 如果没有指定输出文件，生成默认报告文件
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_report_path = f"logs/data_quality_report_{timestamp}.json"
+
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(default_report_path), exist_ok=True)
+
+            with open(default_report_path, 'w', encoding='utf-8') as f:
+                json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
+
+            logger.info(f"\n详细报告已自动保存到: {default_report_path}")
+
+        # 发送飞书通知（如果未禁用）
+        if not no_feishu:
+            check_type = "日常例行检查" if daily_routine else f"{level}级别数据质量检查"
+            logger.info("正在发送飞书通知...")
+            feishu_success = send_feishu_quality_report(report, check_type)
+            if not feishu_success:
+                logger.warning("飞书通知发送失败，但不影响检查结果")
 
         # 如果有严重问题，提醒用户注意
         if report.critical_issues > 0:

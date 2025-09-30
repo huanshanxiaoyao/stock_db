@@ -519,22 +519,23 @@ class StockDataAPI:
         else:
             return {'success': False, 'message': '更新失败', 'result': result}
     
-    def daily_update(self, exchange: str, data_types: List[str]) -> Dict[str, Any]:
+    def daily_update(self, exchange: str, data_types: List[str], target_date=None) -> Dict[str, Any]:
         """每日数据更新接口
-        
+
         Args:
             exchange: 交易所类型 ('all', 'bj', 'sh_sz')
             data_types: 要更新的数据类型列表
-        
+            target_date: 指定更新的目标日期，如果为None则进行增量更新
+
         Returns:
             Dict[str, Any]: 更新结果
         """
         self._ensure_initialized()
-        
+
         if not self.update_service:
             return {'success': False, 'message': '更新服务未初始化'}
-        
-        result = self.update_service.daily_update(exchange=exchange, data_types=data_types)
+
+        result = self.update_service.daily_update(exchange=exchange, data_types=data_types, target_date=target_date)
         if result:
             return {'success': True, 'result': result}
         else:

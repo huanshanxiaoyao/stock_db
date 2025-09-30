@@ -67,7 +67,7 @@ from config import get_config
 from data_source import DataType
 from services.update_service import UpdateService
 from services.position_service import PositionService
-from date_utils import get_trading_days, get_last_trading_day
+from common.date_utils import get_trading_days, get_last_trading_day
 
 # 导入从其他文件移动过来的函数
 from user_actions import action_import_trades, action_import_positions, action_positions_summary, action_import_account_data_daily
@@ -264,6 +264,7 @@ def main():
     daily_parser = subparsers.add_parser('daily', help='每日数据更新')
     daily_parser.add_argument('--tables', help='要更新的表名，用逗号分隔，如: price_data,financial 或 market,financial')
     daily_parser.add_argument('--bj-stocks', action='store_true', help='只更新北交所股票数据')
+    daily_parser.add_argument('--target-date', help='指定更新的目标日期，格式为YYYYMMDD，如: 20250630。如不指定则进行增量更新')
     
     # update-history命令
     update_history_parser = subparsers.add_parser('update-history', help='历史数据更新')
@@ -291,6 +292,14 @@ def main():
                                    help='检查级别: quick(快速检查,默认) 或 standard(标准检查)')
     check_data_parser.add_argument('--tables', help='要检查的表名，用逗号分隔，如: price_data,user_transactions')
     check_data_parser.add_argument('--output-report', help='输出详细报告文件路径（JSON格式）')
+    check_data_parser.add_argument('--daily-routine', action='store_true',
+                                   help='执行日常例行检查（最近交易日全量检查+历史抽样检查）')
+    check_data_parser.add_argument('--recent-days', type=int, default=3,
+                                   help='检查最近几个交易日的数据（默认3天，全量股票检查）')
+    check_data_parser.add_argument('--historical-sample-days', type=int, default=30,
+                                   help='历史数据抽样检查的天数（默认30天）')
+    check_data_parser.add_argument('--no-feishu', action='store_true',
+                                   help='禁用飞书通知（默认启用飞书通知）')
     
     # import-trades命令
     import_trades_parser = subparsers.add_parser('import-trades', help='导入交易记录')

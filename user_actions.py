@@ -11,7 +11,7 @@ import os
 from api import create_api
 from services.position_service import PositionService
 from services.trade_import_service import TradeImportService
-from date_utils import get_trading_days
+from common.date_utils import get_trading_days
 
 logger = logging.getLogger(__name__)
 

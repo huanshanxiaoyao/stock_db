@@ -242,8 +242,19 @@ class UpdateService:
         # 确定更新日期范围
         if end_date is None:
             end_date = date.today()
-        
-        if force_full_update:
+
+        # 检查是否为单日期更新模式（当end_date和今天不是同一天，且是强制更新时）
+        single_date_mode = (force_full_update and end_date != date.today() and
+                           hasattr(self, '_single_date_update_override') and
+                           self._single_date_update_override == end_date)
+
+        if single_date_mode:
+            # 单日期更新：只更新指定的那一天
+            start_date = end_date
+            self.logger.info(f"单日期更新模式，日期: {end_date}")
+            # 清除单日期标记
+            delattr(self, '_single_date_update_override')
+        elif force_full_update:
             # 全量更新：从默认历史起始日期开始（来自配置）
             start_date = self.default_history_start_date
         else:
@@ -340,17 +351,21 @@ class UpdateService:
 
     # ==================== 定时更新服务 ====================
     
-    def daily_update(self, exchange: str, data_types: List[str], stock_codes: Optional[List[str]] = None, 
-                        ) -> Dict[str, Any]:
+    def daily_update(self, exchange: str, data_types: List[str], stock_codes: Optional[List[str]] = None,
+                        target_date=None) -> Dict[str, Any]:
         """每日数据更新
-        
+
         Args:
             exchange: 交易所类型 ('all', 'bj', 'sh', 'sz', 'sh_sz') - 指定要更新的交易所
             stock_codes: 具体股票代码列表（如果提供，忽略exchange参数）
             data_types: 要更新的数据类型列表
+            target_date: 指定更新的目标日期，如果为None则进行增量更新
         """
-        self.logger.info(f"开始每日数据更新，exchange={exchange}, stock_codes={'指定' if stock_codes else '未指定'}")
-        
+        if target_date:
+            self.logger.info(f"开始指定日期数据更新，日期={target_date}, exchange={exchange}, stock_codes={'指定' if stock_codes else '未指定'}")
+        else:
+            self.logger.info(f"开始每日增量数据更新，exchange={exchange}, stock_codes={'指定' if stock_codes else '未指定'}")
+
         results = {'update_time': datetime.now()}
         
         # 确定要更新的股票列表
@@ -377,7 +392,23 @@ class UpdateService:
                 market_types.append(dt)
         
         if market_types:
-            market_result = self.update_multiple_stocks(target_stocks, market_types)
+            if target_date:
+                # 指定日期更新：只更新指定日期的数据
+                market_result = {'successful': {}, 'failed': {}}
+                for data_type in market_types:
+                    self.logger.info(f"更新 {data_type} 数据，目标日期: {target_date}")
+                    batch_result = self._update_multiple_stocks_batch(
+                        target_stocks, [data_type],
+                        force_full_update=True, end_date=target_date)
+
+                    # 手动设置开始日期为目标日期，覆盖批量更新的逻辑
+                    self._single_date_update_override = target_date
+
+                    market_result['successful'].update(batch_result.get('successful', {}))
+                    market_result['failed'].update(batch_result.get('failed', {}))
+            else:
+                # 增量更新：正常的每日更新逻辑
+                market_result = self.update_multiple_stocks(target_stocks, market_types)
             results['market_update'] = market_result
         
         return results

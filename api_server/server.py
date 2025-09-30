@@ -18,6 +18,8 @@ from typing import Dict, List, Optional, Any
 from functools import wraps
 
 from flask import Flask, request, jsonify, g
+import pandas as pd
+import numpy as np
 from flask_cors import CORS
 from werkzeug.exceptions import BadRequest, NotFound, InternalServerError
 
@@ -34,9 +36,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def safe_json_convert(df):
+    """安全的DataFrame转JSON转换，处理pandas数据类型"""
+    if df.empty:
+        return []
+
+    # 将DataFrame转换为records格式，同时处理数据类型
+    records = df.to_dict('records')
+
+    # 转换numpy/pandas数据类型为Python原生类型
+    for record in records:
+        for key, value in record.items():
+            if pd.isna(value):
+                record[key] = None
+            elif isinstance(value, (np.integer, np.int64)):
+                record[key] = int(value)
+            elif isinstance(value, (np.floating, np.float64)):
+                record[key] = float(value)
+            elif isinstance(value, np.bool_):
+                record[key] = bool(value)
+
+    return records
+
 class StockDataAPIServer:
     """股票数据API服务器"""
-    
+
     def __init__(self, config_path: str = "config.yaml", use_replica: bool = True):
         """初始化API服务器
         
@@ -219,7 +243,7 @@ class StockDataAPIServer:
                     }), 404
                 
                 # 转换为JSON格式
-                result = data.to_dict('records')
+                result = safe_json_convert(data)
                 
                 return jsonify({
                     'success': True,
@@ -245,49 +269,114 @@ class StockDataAPIServer:
             """获取股票财务数据"""
             try:
                 api = self._get_data_api()
-                
+
                 # 获取查询参数
-                data_type = request.args.get('type', 'summary')  # summary, ratios
+                data_type = request.args.get('type', 'summary')  # valuation, indicator, summary
                 periods = request.args.get('periods', 4, type=int)
-                
-                # 获取财务数据
-                if data_type == 'summary':
-                    # 获取所有财务数据
-                    data = api.get_financial_data(code)
-                    
+
+                # 获取日期范围参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+
+                # 解析日期参数
+                start_date_obj = None
+                end_date_obj = None
+
+                if start_date:
+                    try:
+                        start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    except ValueError:
+                        return jsonify({
+                            'success': False,
+                            'error': 'start_date格式错误，请使用YYYY-MM-DD格式'
+                        }), 400
+
+                if end_date:
+                    try:
+                        end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                    except ValueError:
+                        return jsonify({
+                            'success': False,
+                            'error': 'end_date格式错误，请使用YYYY-MM-DD格式'
+                        }), 400
+
+                # 根据类型获取特定的财务数据
+                result = {}
+
+                if data_type == 'valuation':
+                    # 只获取估值数据
+                    try:
+                        sql = "SELECT * FROM valuation_data WHERE code = ?"
+                        params = [code]
+
+                        if start_date_obj:
+                            sql += " AND day >= ?"
+                            params.append(start_date_obj)
+
+                        if end_date_obj:
+                            sql += " AND day <= ?"
+                            params.append(end_date_obj)
+
+                        sql += " ORDER BY day DESC LIMIT 10"
+
+                        df = api.query(sql, params)
+                        if not df.empty:
+                            result['valuation_data'] = safe_json_convert(df)
+                    except Exception as e:
+                        logger.debug(f"获取valuation_data失败: {e}")
+
+                elif data_type == 'indicator':
+                    # 只获取指标数据
+                    try:
+                        sql = "SELECT * FROM indicator_data WHERE code = ?"
+                        params = [code]
+
+                        if start_date_obj:
+                            sql += " AND pubDate >= ?"
+                            params.append(start_date_obj)
+
+                        if end_date_obj:
+                            sql += " AND pubDate <= ?"
+                            params.append(end_date_obj)
+
+                        sql += " ORDER BY pubDate DESC LIMIT 10"
+
+                        df = api.query(sql, params)
+                        if not df.empty:
+                            result['indicator_data'] = safe_json_convert(df)
+                    except Exception as e:
+                        logger.debug(f"获取indicator_data失败: {e}")
+
+                elif data_type == 'summary':
+                    # 获取所有财务数据，传递日期参数
+                    data = api.get_financial_data(code, start_date_obj, end_date_obj)
+
                     if isinstance(data, dict):
                         # 财务摘要数据
-                        result = {}
                         for key, df in data.items():
                             if not df.empty:
-                                result[key] = df.to_dict('records')
-                    else:
-                        result = {}
+                                result[key] = safe_json_convert(df)
+
                 elif data_type == 'ratios':
                     # 财务比率功能已移除
                     result = {}
                 else:
-                    # 获取所有财务数据
-                    data = api.get_financial_data(code)
-                    if isinstance(data, dict) and data:
-                        result = {}
-                        for key, df in data.items():
-                            if not df.empty:
-                                result[key] = df.to_dict('records')
-                    else:
-                        result = {}
-                
+                    return jsonify({
+                        'success': False,
+                        'error': f'不支持的数据类型: {data_type}，支持的类型: valuation, indicator, summary'
+                    }), 400
+
                 if not result:
                     return jsonify({
                         'success': False,
-                        'error': f'未找到股票 {code} 的财务数据'
+                        'error': f'未找到股票 {code} 的 {data_type} 数据'
                     }), 404
-                
+
                 return jsonify({
                     'success': True,
                     'data': result
                 })
-                
+
             except Exception as e:
                 logger.error(f"获取财务数据失败: {e}")
                 return jsonify({
@@ -336,7 +425,7 @@ class StockDataAPIServer:
                             start_date=start_date,
                             end_date=end_date
                         )
-                        results[code] = price_data.to_dict('records') if not price_data.empty else []
+                        results[code] = safe_json_convert(price_data) if not price_data.empty else []
                     except Exception as e:
                         results[code] = {'error': str(e)}
                 
@@ -396,8 +485,8 @@ class StockDataAPIServer:
                 
                 return jsonify({
                     'success': True,
-                    'data': df.to_dict('records') if not df.empty else [],
-                    'count': len(df)
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
                 })
                 
             except Exception as e:
@@ -465,7 +554,7 @@ class StockDataAPIServer:
                 
                 # 获取总数
                 count_result = api.query(count_sql, params)
-                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                total = int(count_result.iloc[0]['total']) if not count_result.empty else 0
                 
                 # 构建分页查询
                 sql = f"SELECT * FROM user_transactions WHERE {where_clause} ORDER BY trade_date DESC, trade_time DESC"
@@ -477,12 +566,12 @@ class StockDataAPIServer:
                 
                 return jsonify({
                     'success': True,
-                    'data': result.to_dict('records') if not result.empty else [],
+                    'data': safe_json_convert(result) if not result.empty else [],
                     'pagination': {
                         'total': total,
                         'limit': limit,
                         'offset': offset,
-                        'count': len(result)
+                        'count': int(len(result))
                     }
                 })
                 
@@ -550,7 +639,7 @@ class StockDataAPIServer:
                 
                 return jsonify({
                     'success': True,
-                    'data': result.to_dict('records') if not result.empty else [],
+                    'data': safe_json_convert(result) if not result.empty else [],
                     'query_info': {
                         'user_id': user_id,
                         'days': days,
@@ -558,7 +647,7 @@ class StockDataAPIServer:
                         'end_date': str(end_date),
                         'stock_code': stock_code,
                         'trade_type': trade_type,
-                        'count': len(result)
+                        'count': int(len(result))
                     }
                 })
                 
@@ -621,7 +710,7 @@ class StockDataAPIServer:
                 
                 # 获取总数
                 count_result = api.query(count_sql, params)
-                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                total = int(count_result.iloc[0]['total']) if not count_result.empty else 0
                 
                 # 构建分页查询
                 sql = f"SELECT * FROM user_positions WHERE {where_clause} ORDER BY position_date DESC, user_id, stock_code"
@@ -633,12 +722,12 @@ class StockDataAPIServer:
                 
                 return jsonify({
                     'success': True,
-                    'data': result.to_dict('records') if not result.empty else [],
+                    'data': safe_json_convert(result) if not result.empty else [],
                     'pagination': {
                         'total': total,
                         'limit': limit,
                         'offset': offset,
-                        'count': len(result)
+                        'count': int(len(result))
                     }
                 })
                 
@@ -700,7 +789,7 @@ class StockDataAPIServer:
                 
                 # 获取总数
                 count_result = api.query(count_sql, params)
-                total = count_result.iloc[0]['total'] if not count_result.empty else 0
+                total = int(count_result.iloc[0]['total']) if not count_result.empty else 0
                 
                 # 构建分页查询
                 sql = f"SELECT * FROM user_account_info WHERE {where_clause} ORDER BY info_date DESC, user_id"
@@ -712,12 +801,12 @@ class StockDataAPIServer:
                 
                 return jsonify({
                     'success': True,
-                    'data': result.to_dict('records') if not result.empty else [],
+                    'data': safe_json_convert(result) if not result.empty else [],
                     'pagination': {
                         'total': total,
                         'limit': limit,
                         'offset': offset,
-                        'count': len(result)
+                        'count': int(len(result))
                     }
                 })
                 
@@ -802,8 +891,8 @@ class StockDataAPIServer:
                     'data': {
                         'user_id': user_id,
                         'position_date': str(position_date),
-                        'summary': summary_result.to_dict('records')[0],
-                        'top_positions': top_positions.to_dict('records') if not top_positions.empty else []
+                        'summary': safe_json_convert(summary_result)[0],
+                        'top_positions': safe_json_convert(top_positions) if not top_positions.empty else []
                     }
                 })
                 

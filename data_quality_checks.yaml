@@ -521,6 +521,52 @@ execution_config:
     max_errors_per_table: 5
     isolation_level: "table"  # table, check, none
 
+# 日常例行检查配置
+daily_routine:
+  enabled: true
+  description: "每日例行数据质量检查配置"
+
+  # 最近交易日检查配置
+  recent_days_check:
+    enabled: true
+    default_days: 3
+    priority_tables:
+      - "stock_list"
+      - "price_data"
+      - "valuation_data"
+      - "user_positions"
+      - "user_account_info"
+    full_stock_check: true  # 对最近交易日进行全量股票检查
+
+    # 检查阈值
+    thresholds:
+      price_data_missing_ratio_warning: 0.05  # 5%股票缺失为警告
+      price_data_missing_ratio_critical: 0.20  # 20%股票缺失为严重
+      valuation_data_missing_ratio_warning: 0.10  # 10%估值数据缺失为警告
+      valuation_data_missing_ratio_critical: 0.50  # 50%估值数据缺失为严重
+
+  # 历史抽样检查配置
+  historical_sample_check:
+    enabled: true
+    default_sample_days: 30
+    sampling_strategy: "random"  # random, recent, distributed
+    exclude_recent_days: 7  # 排除最近N天，避免与recent_days_check重复
+
+    # 抽样范围
+    sampling_range:
+      max_history_days: 365  # 最多从过去365天中抽样
+      min_data_points: 10    # 最少需要10个数据点才进行抽样
+
+    # 用户数据全量检查
+    user_data_full_check: true
+    user_data_tables:
+      - "user_transactions"
+      - "user_positions"
+      - "user_account_info"
+
+    # 股票数据抽样检查
+    stock_data_sample_size: 50  # 每个历史交易日抽样检查50只股票
+
 # 扩展配置
 extensions:
   # 自定义检查脚本
