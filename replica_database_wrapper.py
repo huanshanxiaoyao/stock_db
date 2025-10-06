@@ -89,7 +89,7 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
             try:
                 # 创建新的数据库实例并连接到新副本
                 replica_path = self._replica_manager.get_replica_path()
-                new_db_instance = DuckDBDatabase(replica_path)
+                new_db_instance = DuckDBDatabase(replica_path, is_replica=True)
                 new_db_instance.connect()
 
                 # 设置新的数据库实例
@@ -122,9 +122,9 @@ class ReplicaDatabaseWrapper(DatabaseInterface):
             try:
                 # 启动副本管理器
                 replica_path = self._replica_manager.start()
-                
-                # 创建数据库实例并连接到副本
-                self._db_instance = DuckDBDatabase(replica_path)
+
+                # 创建数据库实例并连接到副本（标记为副本模式，禁用备份）
+                self._db_instance = DuckDBDatabase(replica_path, is_replica=True)
                 self._db_instance.connect()
                 self._connected = True
                 

@@ -18,7 +18,7 @@ from models.base import BaseModel
 class DuckDBDatabase(DatabaseInterface):
     """DuckDB数据库实现"""
     
-    def __init__(self, db_path: Optional[str] = None, snapshot_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, snapshot_path: Optional[str] = None, is_replica: bool = False):
         # 如果没有指定db_path，使用配置中的路径
         if db_path is None:
             from config import get_config
@@ -32,6 +32,8 @@ class DuckDBDatabase(DatabaseInterface):
         self._lock = threading.RLock()
         # 脏标记：仅当本次运行发生写入操作时为 True
         self._dirty = False
+        # 副本模式标记：副本数据库不需要备份（副本本身就是备份）
+        self._is_replica = is_replica
     
     def connect(self) -> None:
         """连接数据库"""
@@ -60,6 +62,11 @@ class DuckDBDatabase(DatabaseInterface):
     
     def _perform_timed_backup(self) -> None:
         """执行定时备份逻辑"""
+        # 副本模式下不需要备份（副本本身就是备份）
+        if self._is_replica:
+            self.logger.debug("副本模式下跳过备份")
+            return
+
         try:
             # 确保备份目录存在
             backup_dir = self.db_path.parent / "backups"
