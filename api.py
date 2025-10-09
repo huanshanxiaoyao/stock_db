@@ -201,11 +201,8 @@ class StockDataAPI:
         """
         self._ensure_initialized()
         
-        # 是否包含北交所：若显式请求 BSE（exchange='BSE' 或 market='bse'）则包含，否则默认不包含
-        include_bj = (
-            (exchange and str(exchange).upper() == 'BSE') or 
-            (market and str(market).lower() == 'bse')
-        )
+        # 是否包含北交所：默认包含，只有在明确排除时才不包含
+        include_bj = True
         
         # 首先尝试从 stock_list 表获取
         if self.db.table_exists('stock_list'):
@@ -224,7 +221,7 @@ class StockDataAPI:
             if active_only:
                 conditions.append("(end_date IS NULL OR end_date > CURRENT_DATE)")
             
-            # 默认过滤北交所，除非明确请求 BSE
+            # 默认包含北交所，除非明确排除
             if not include_bj:
                 conditions.append("code NOT LIKE '%.BJ'")
             
@@ -287,6 +284,7 @@ class StockDataAPI:
         self._ensure_initialized()
         
         if not self.stock_list_service:
+            self.logger.error("股票列表服务未初始化")
             return None
         
         stock_info = self.stock_list_service.get_stock_info(code)

@@ -15,7 +15,19 @@ class BaseModel(ABC):
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
-        return asdict(self)
+        import numpy as np
+        data = asdict(self)
+        
+        # 处理不能JSON序列化的类型
+        for key, value in data.items():
+            if isinstance(value, date):
+                data[key] = value.strftime('%Y-%m-%d')
+            elif isinstance(value, (bool, np.bool_)):
+                data[key] = bool(value)  # 确保是Python原生bool类型
+            elif value is None:
+                data[key] = None
+        
+        return data
     
     def to_series(self) -> pd.Series:
         """转换为pandas Series"""

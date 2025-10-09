@@ -64,6 +64,9 @@ def action_daily(args):
             if not data_types:
                 logger.error("没有有效的表类型，使用默认的市场数据更新")
                 return
+        else:
+            # 如果没有指定表类型，使用默认的数据类型
+            data_types = ['price_data']
 
         # 确定交易所类型
         exchange = 'bj' if args.bj_stocks else 'all'

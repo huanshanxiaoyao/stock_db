@@ -29,11 +29,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api import StockDataAPI
 from config import get_config
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# 获取日志记录器（不重复配置basicConfig，避免覆盖start.py中的配置）
 logger = logging.getLogger(__name__)
 
 def safe_json_convert(df):
@@ -81,7 +77,29 @@ class StockDataAPIServer:
         
         # 初始化数据API（立即初始化而不是延迟）
         db_path = self.config.database.path if hasattr(self.config, 'database') else 'stock_data.duckdb'
-        self.data_api = StockDataAPI(db_path, {}, use_replica=self.use_replica)
+        
+        # 构建配置字典，包含数据源配置
+        api_config = {}
+        if hasattr(self.config, 'data_sources'):
+            # 将数据源配置转换为字典格式
+            data_sources_config = []
+            for source_name, source_config in self.config.data_sources.items():
+                if hasattr(source_config, 'enabled') and source_config.enabled:
+                    source_dict = {
+                        'type': source_name,
+                        'name': source_name,  # 添加name字段
+                        'enabled': True,
+                        'default': True  # 设置为默认数据源
+                    }
+                    # 添加其他配置项
+                    if hasattr(source_config, 'api_config'):
+                        source_dict['api_config'] = source_config.api_config
+                    data_sources_config.append(source_dict)
+            
+            if data_sources_config:
+                api_config['data_sources'] = data_sources_config
+        
+        self.data_api = StockDataAPI(db_path, api_config, use_replica=self.use_replica)
         self.data_api.initialize()
 
         # 设置路由
@@ -157,6 +175,7 @@ class StockDataAPIServer:
                     if stock_info:
                         stocks.append(stock_info)
                     else:
+                        logger.info(f"未找到股票 {code} 的详细信息，使用默认值")
                         # 如果没有详细信息，至少返回代码
                         stocks.append({'code': code, 'name': code, 'display_name': code})
                 
