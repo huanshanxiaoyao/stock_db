@@ -1015,24 +1015,25 @@ class DataQualityService:
                           f"交易日{trading_day}价格数据检查失败: {e}")
 
     def _check_valuation_data_for_day(self, trading_day: str, full_stock_check: bool):
-        """检查特定交易日的估值数据"""
+        """检查特定交易日的估值数据（排除北交所股票）"""
         day_formatted = f"{trading_day[:4]}-{trading_day[4:6]}-{trading_day[6:8]}"
 
         try:
-            # 检查估值数据与价格数据的一致性
+            # 检查估值数据与价格数据的一致性（排除BJ股票）
             missing_sql = """
                 SELECT COUNT(*) as missing_count
                 FROM price_data p
                 LEFT JOIN valuation_data v ON p.code = v.code AND p.day = v.day
                 WHERE p.day = ? AND v.code IS NULL
+                AND p.code NOT LIKE '%.BJ'
             """
             missing_result = self.api.query(missing_sql, [day_formatted])
 
             if not missing_result.empty:
                 missing_count = missing_result.iloc[0]['missing_count']
                 if missing_count > 0:
-                    # 获取价格数据总数作为基准
-                    total_sql = "SELECT COUNT(*) as total FROM price_data WHERE day = ?"
+                    # 获取价格数据总数作为基准（排除BJ股票）
+                    total_sql = "SELECT COUNT(*) as total FROM price_data WHERE day = ? AND code NOT LIKE '%.BJ'"
                     total_result = self.api.query(total_sql, [day_formatted])
 
                     if not total_result.empty:
@@ -1042,13 +1043,14 @@ class DataQualityService:
                             if missing_ratio > 0.1:  # 超过10%缺失
                                 severity = 'critical' if missing_ratio > 0.5 else 'warning'
 
-                                # 获取缺失估值数据的股票样本
+                                # 获取缺失估值数据的股票样本（排除BJ股票）
                                 valuation_samples = []
                                 valuation_sample_sql = """
                                     SELECT p.code
                                     FROM price_data p
                                     LEFT JOIN valuation_data v ON p.code = v.code AND p.day = v.day
                                     WHERE p.day = ? AND v.code IS NULL
+                                    AND p.code NOT LIKE '%.BJ'
                                     LIMIT 5
                                 """
                                 valuation_sample_result = self.api.query(valuation_sample_sql, [day_formatted])
@@ -1406,10 +1408,10 @@ class DataQualityService:
                           f"交易日{trading_day}技术指标数据检查失败: {e}")
 
     def _check_quarterly_indicator_data(self):
-        """检查季度财报指标数据（indicator_data）的完整性和时效性"""
+        """检查季度财报指标数据（indicator_data）的完整性和时效性（排除北交所股票）"""
         try:
-            # 检查数据总量
-            total_sql = "SELECT COUNT(*) as total FROM indicator_data"
+            # 检查数据总量（排除BJ股票）
+            total_sql = "SELECT COUNT(*) as total FROM indicator_data WHERE code NOT LIKE '%.BJ'"
             total_result = self.api.query(total_sql)
 
             if total_result.empty or total_result.iloc[0]['total'] == 0:
@@ -1419,11 +1421,12 @@ class DataQualityService:
 
             total_count = total_result.iloc[0]['total']
 
-            # 检查最近的财报期分布（只查询季度末日期）
+            # 检查最近的财报期分布（只查询季度末日期，排除BJ股票）
             recent_quarters_sql = """
                 SELECT statDate, COUNT(*) as count
                 FROM indicator_data
                 WHERE statDate >= '2024-01-01'
+                AND code NOT LIKE '%.BJ'
                 AND (CAST(statDate AS VARCHAR) LIKE '%-03-31' OR
                      CAST(statDate AS VARCHAR) LIKE '%-06-30' OR
                      CAST(statDate AS VARCHAR) LIKE '%-09-30' OR
@@ -1471,7 +1474,7 @@ class DataQualityService:
                     self._add_issue('warning', 'completeness', DataType.INDICATOR_DATA,
                                   f"缺失财报期数据: {', '.join(missing_quarters)}")
 
-            # 检查数据完整性（是否有空值过多的情况）
+            # 检查数据完整性（是否有空值过多的情况，排除BJ股票）
             null_check_sql = """
                 SELECT
                     SUM(CASE WHEN eps IS NULL THEN 1 ELSE 0 END) as null_eps,
@@ -1479,6 +1482,7 @@ class DataQualityService:
                     COUNT(*) as total
                 FROM indicator_data
                 WHERE statDate >= '2024-01-01'
+                AND code NOT LIKE '%.BJ'
             """
             null_result = self.api.query(null_check_sql)
 
