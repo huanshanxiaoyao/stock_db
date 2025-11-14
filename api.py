@@ -325,28 +325,70 @@ class StockDataAPI:
         """获取财务数据"""
         self._ensure_initialized()
 
-        # 尝试从多个财务表获取数据
-        financial_tables = ['income_statement', 'balance_sheet', 'cashflow_statement', 'valuation_data', 'indicator_data']
+        # 定义每个表的日期列名
+        table_date_columns = {
+            'income_statement': 'pub_date',
+            'balance_sheet': 'pub_date',
+            'cashflow_statement': 'pub_date',
+            'valuation_data': 'day',
+            'indicator_data': 'pubDate'
+        }
+
         result = {}
 
-        for table in financial_tables:
+        for table, date_column in table_date_columns.items():
             try:
                 sql = f"SELECT * FROM {table} WHERE code = ?"
                 params = [code]
 
-                if start_date:
-                    sql += " AND day >= ?"
-                    params.append(start_date)
+                # indicator_data是季度数据，如果指定日期范围内没有数据，返回最近的数据
+                if table == 'indicator_data':
+                    # 首先尝试在指定日期范围内查询
+                    if start_date or end_date:
+                        date_sql = sql
+                        date_params = params.copy()
 
-                if end_date:
-                    sql += " AND day <= ?"
-                    params.append(end_date)
+                        if start_date:
+                            date_sql += f" AND {date_column} >= ?"
+                            date_params.append(start_date)
 
-                sql += " ORDER BY day DESC LIMIT 10"
+                        if end_date:
+                            date_sql += f" AND {date_column} <= ?"
+                            date_params.append(end_date)
 
-                df = self.db.query(sql, params)
-                if not df.empty:
-                    result[table] = df
+                        date_sql += f" ORDER BY {date_column} DESC LIMIT 10"
+                        df = self.db.query(date_sql, date_params)
+
+                        # 如果找到数据，使用它；否则获取最近的数据
+                        if not df.empty:
+                            result[table] = df
+                        else:
+                            # 获取最近的数据
+                            sql += f" ORDER BY {date_column} DESC LIMIT 10"
+                            df = self.db.query(sql, params)
+                            if not df.empty:
+                                result[table] = df
+                    else:
+                        # 没有日期过滤，直接获取最近的数据
+                        sql += f" ORDER BY {date_column} DESC LIMIT 10"
+                        df = self.db.query(sql, params)
+                        if not df.empty:
+                            result[table] = df
+                else:
+                    # 其他表正常处理日期过滤
+                    if start_date:
+                        sql += f" AND {date_column} >= ?"
+                        params.append(start_date)
+
+                    if end_date:
+                        sql += f" AND {date_column} <= ?"
+                        params.append(end_date)
+
+                    sql += f" ORDER BY {date_column} DESC LIMIT 10"
+
+                    df = self.db.query(sql, params)
+                    if not df.empty:
+                        result[table] = df
             except Exception as e:
                 self.logger.debug(f"从{table}表获取数据失败: {e}")
                 continue

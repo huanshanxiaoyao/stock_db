@@ -346,23 +346,38 @@ class StockDataAPIServer:
 
                 elif data_type == 'indicator':
                     # 只获取指标数据
+                    # indicator_data是季度/定期数据，如果指定日期范围内没有数据，则返回最近的数据
                     try:
                         sql = "SELECT * FROM indicator_data WHERE code = ?"
                         params = [code]
 
-                        if start_date_obj:
-                            sql += " AND pubDate >= ?"
-                            params.append(start_date_obj)
+                        # 首先尝试在指定日期范围内查询
+                        date_filtered = False
+                        if start_date_obj or end_date_obj:
+                            date_sql = sql
+                            date_params = params.copy()
 
-                        if end_date_obj:
-                            sql += " AND pubDate <= ?"
-                            params.append(end_date_obj)
+                            if start_date_obj:
+                                date_sql += " AND pubDate >= ?"
+                                date_params.append(start_date_obj)
 
-                        sql += " ORDER BY pubDate DESC LIMIT 10"
+                            if end_date_obj:
+                                date_sql += " AND pubDate <= ?"
+                                date_params.append(end_date_obj)
 
-                        df = api.query(sql, params)
-                        if not df.empty:
-                            result['indicator_data'] = safe_json_convert(df)
+                            date_sql += " ORDER BY pubDate DESC LIMIT 10"
+                            df = api.query(date_sql, date_params)
+
+                            if not df.empty:
+                                result['indicator_data'] = safe_json_convert(df)
+                                date_filtered = True
+
+                        # 如果日期范围内没有数据，返回最近的10条数据
+                        if not date_filtered:
+                            sql += " ORDER BY pubDate DESC LIMIT 10"
+                            df = api.query(sql, params)
+                            if not df.empty:
+                                result['indicator_data'] = safe_json_convert(df)
                     except Exception as e:
                         logger.debug(f"获取indicator_data失败: {e}")
 
