@@ -285,9 +285,14 @@ def action_import_account_data_daily(args):
     api = create_api(args.db_path)
     try:
         api.initialize()
-        
-        # 设置数据路径
-        data_path = args.data_path or "D:/Users/Jack/myqmt_admin/data/account"
+
+        # 设置数据路径 - 支持环境变量和平台自适应
+        default_account_path = os.getenv("STOCK_ACCOUNT_DATA_PATH")
+        if not default_account_path:
+            # 使用用户主目录下的默认路径
+            default_account_path = str(Path.home() / "myqmt_admin" / "data" / "account")
+
+        data_path = args.data_path or default_account_path
         if not os.path.exists(data_path):
             logger.error(f"数据路径不存在: {data_path}")
             return

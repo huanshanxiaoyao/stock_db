@@ -324,7 +324,7 @@ def main():
     account_daily_parser = subparsers.add_parser('import-account-data-daily', help='按天增量导入账户交易和持仓数据')
     account_daily_parser.add_argument('--dates', nargs='+', required=True, help='指定要导入的日期列表，格式为YYYYMMDD，如：20250903 20250904')
     account_daily_parser.add_argument('--account-ids', nargs='+', help='指定账户ID列表，不指定则导入所有账户')
-    account_daily_parser.add_argument('--data-path', help='数据源路径，默认为 D:/Users/Jack/myqmt_admin/data/account')
+    account_daily_parser.add_argument('--data-path', help='数据源路径，默认为 ~/myqmt_admin/data/account 或环境变量 STOCK_ACCOUNT_DATA_PATH')
     account_daily_parser.add_argument('--overwrite', action='store_true', help='覆盖已存在的数据')
     
     args = parser.parse_args()

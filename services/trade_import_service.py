@@ -261,18 +261,29 @@ class TradeImportService:
             'file_results': file_results
         }
     
-    def reimport_account_date(self, account_id: str, trade_date: date) -> bool:
-        """重新导入指定账户和日期的交易数据（先删除再导入）"""
+    def reimport_account_date(self, account_id: str, trade_date: date, base_path: Optional[str] = None) -> bool:
+        """重新导入指定账户和日期的交易数据（先删除再导入）
+
+        Args:
+            account_id: 账户ID
+            trade_date: 交易日期
+            base_path: 数据源基础路径，如果不提供则使用环境变量或默认路径
+        """
         try:
             # 先删除现有数据
             self.database.delete_user_transactions(account_id, trade_date)
-            
+
             # 构建文件路径并导入
             date_str = trade_date.strftime('%Y%m%d')
-            # 这里需要知道基础路径，可以作为参数传入或配置
-            # 暂时硬编码，实际使用时应该配置化
-            base_path = Path("D:/Users/Jack/myqmt_admin/data/account")
-            file_path = base_path / account_id / "trades_orders" / f"{date_str}.json"
+
+            # 获取基础路径：优先使用传入的参数，其次环境变量，最后默认路径
+            if base_path is None:
+                base_path = os.getenv("STOCK_ACCOUNT_DATA_PATH")
+                if base_path is None:
+                    base_path = str(Path.home() / "myqmt_admin" / "data" / "account")
+
+            base_path_obj = Path(base_path)
+            file_path = base_path_obj / account_id / "trades_orders" / f"{date_str}.json"
             
             if file_path.exists():
                 result = self.import_trade_file(str(file_path))

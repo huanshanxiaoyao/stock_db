@@ -7,20 +7,38 @@ from typing import Dict, Any, Optional, Union
 from pathlib import Path
 import logging
 from dataclasses import dataclass, field
+import platform
 
 # 获取项目根目录的绝对路径
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
-# 默认数据根目录
-DEFAULT_DATA_ROOT = Path("D:/Data/stock_db")
+def _get_default_data_root() -> Path:
+    """获取平台特定的默认数据根目录
+
+    Returns:
+        Path: 默认数据根目录路径
+    """
+    system = platform.system()
+    if system == "Windows":
+        return Path("D:/Data/stock_db")
+    elif system == "Darwin":  # macOS
+        return Path.home() / "Data" / "stock_db"
+    else:  # Linux
+        return Path.home() / "data" / "stock_db"
+
+# 默认数据根目录（平台自适应）
+DEFAULT_DATA_ROOT = _get_default_data_root()
 
 def get_data_root() -> Path:
     """获取数据根目录
-    
+
     优先级：
     1. 环境变量 STOCK_DATA_ROOT
     2. 配置文件中的设置
-    3. 默认路径 D:/Data/stock_db
+    3. 平台默认路径:
+       - Windows: D:/Data/stock_db
+       - macOS: ~/Data/stock_db
+       - Linux: ~/data/stock_db
     """
     # 从环境变量获取
     env_path = os.getenv("STOCK_DATA_ROOT")
