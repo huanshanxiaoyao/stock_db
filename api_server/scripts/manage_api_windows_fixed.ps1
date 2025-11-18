@@ -6,7 +6,7 @@ param(
     [ValidateSet("start", "stop", "status", "restart", "logs", "list")]
     [string]$Action,
 
-    [int]$Port = 5000,
+    [int]$Port = 5005,
     [string]$Host = "0.0.0.0",
     [switch]$DebugMode,
     [int]$JobId
@@ -82,7 +82,7 @@ function Show-ApiLogs {
 }
 
 function Test-ApiHealth {
-    param([int]$TestPort = 5000)
+    param([int]$TestPort = 5005)
 
     try {
         $response = Invoke-WebRequest -Uri "http://localhost:$TestPort/health" -TimeoutSec 5 -ErrorAction Stop
@@ -150,7 +150,7 @@ switch ($Action) {
 }
 
 Write-Host "`n使用说明:" -ForegroundColor Cyan
-Write-Host "  启动: .\manage_api_windows.ps1 -Action start [-Port 5000] [-Debug]" -ForegroundColor White
+Write-Host "  启动: .\manage_api_windows.ps1 -Action start [-Port 5005] [-Debug]" -ForegroundColor White
 Write-Host "  停止: .\manage_api_windows.ps1 -Action stop [-JobId ID]" -ForegroundColor White
 Write-Host "  状态: .\manage_api_windows.ps1 -Action status" -ForegroundColor White
 Write-Host "  日志: .\manage_api_windows.ps1 -Action logs [-JobId ID]" -ForegroundColor White

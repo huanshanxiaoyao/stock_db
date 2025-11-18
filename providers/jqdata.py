@@ -433,14 +433,17 @@ class JQDataSource(BaseDataSource):
                 jq_code = self._to_jq_code(code)
                 
                 # 使用get_price获取价格数据，包含复权因子等字段
+                # 使用fq='pre'获取前复权价格数据（中国市场标准）
+                # fq='pre': 返回前复权价格，最新日期factor=1.0，历史日期factor<1.0
+                # 计算原始价格：raw_price = adjusted_price / factor
                 df = get_price(
-                    jq_code, 
-                    start_date=start_date.strftime('%Y-%m-%d'), 
+                    jq_code,
+                    start_date=start_date.strftime('%Y-%m-%d'),
                     end_date=end_date.strftime('%Y-%m-%d'),
                     frequency='daily',
                     fields=['open', 'close', 'high', 'low', 'volume', 'money', 'pre_close', 'factor', 'high_limit', 'low_limit', 'avg', 'paused'],
                     skip_paused=False,
-                    fq='post'
+                    fq='pre'
                 )
                 
                 if not df.empty:
@@ -450,10 +453,14 @@ class JQDataSource(BaseDataSource):
                     
                     # 添加股票代码
                     df['code'] = self._from_jq_code(jq_code)
-                    
-                    # 计算复权收盘价和复权因子（保持向后兼容）
+
+                    # 使用fq='pre'时，close已经是前复权价格（已调整）
+                    # factor是复权因子：最新日期为1.0，历史日期<1.0
+                    # adj_close就是close本身（已经是复权价格）
+                    # 如需原始价格：raw_price = close / factor
                     if 'factor' in df.columns:
-                        df['adj_close'] = df['close'] * df['factor']
+                        # fq='pre'模式：close已是前复权价格，无需再乘以factor
+                        df['adj_close'] = df['close']
                         df['adj_factor'] = df['factor']  # 兼容字段
                     else:
                         df['adj_close'] = df['close']

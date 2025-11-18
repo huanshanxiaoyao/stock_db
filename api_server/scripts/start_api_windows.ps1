@@ -2,7 +2,7 @@
 # Start API server using PowerShell background jobs
 
 param(
-    [int]$Port = 5000,
+    [int]$Port = 5005,
     [string]$HostAddress = "0.0.0.0",
     [switch]$Debug,
     [string]$Config = "config.yaml",

@@ -50,10 +50,10 @@ def main():
         help='API服务器监听地址 (默认: 0.0.0.0)'
     )
     parser.add_argument(
-        '--port', 
-        type=int, 
-        default=5000, 
-        help='API服务器监听端口 (默认: 5000)'
+        '--port',
+        type=int,
+        default=5005,
+        help='API服务器监听端口 (默认: 5005)'
     )
     parser.add_argument(
         '--debug', 

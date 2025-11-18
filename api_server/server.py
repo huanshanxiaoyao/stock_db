@@ -992,7 +992,7 @@ class StockDataAPIServer:
                 'details': str(error)
             }), 500
     
-    def run(self, host: str = '0.0.0.0', port: int = 5000, debug: bool = False):
+    def run(self, host: str = '0.0.0.0', port: int = 5005, debug: bool = False):
         """启动API服务器
         
         Args:
@@ -1033,7 +1033,7 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='股票数据API服务器')
     parser.add_argument('--host', default='0.0.0.0', help='监听地址')
-    parser.add_argument('--port', type=int, default=5000, help='监听端口')
+    parser.add_argument('--port', type=int, default=5005, help='监听端口')
     parser.add_argument('--debug', action='store_true', help='启用调试模式')
     parser.add_argument('--config', default='config.yaml', help='配置文件路径')
     parser.add_argument('--no-replica', action='store_true', help='禁用数据库副本模式（使用直连模式）')

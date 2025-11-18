@@ -6,10 +6,10 @@
 
 ```bash
 # 开发环境启动
-python api_server/start.py --host 127.0.0.1 --port 5000
+python api_server/start.py --host 127.0.0.1 --port 5005
 
 # 直接启动（绕过副本模式）
-python api_server/server.py --host 127.0.0.1 --port 5000 --no-replica
+python api_server/server.py --host 127.0.0.1 --port 5005 --no-replica
 ```
 
 ## 基础端点
@@ -49,7 +49,7 @@ GET /api/v1/stocks?market={market}&exchange={exchange}&active_only={bool}&limit=
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks?limit=3"
+curl "http://127.0.0.1:5005/api/v1/stocks?limit=3"
 ```
 
 **响应示例:**
@@ -77,7 +77,7 @@ GET /api/v1/stocks/{code}
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ"
+curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ"
 ```
 
 ## 2. price_data 表 ✅ 完全支持
@@ -94,7 +94,7 @@ GET /api/v1/stocks/{code}/price?start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}&fi
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/price?start_date=2025-09-20&end_date=2025-09-27"
+curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/price?start_date=2025-09-20&end_date=2025-09-27"
 ```
 
 **响应示例:**
@@ -132,7 +132,7 @@ Content-Type: application/json
 
 **请求示例:**
 ```bash
-curl -X POST "http://127.0.0.1:5000/api/v1/stocks/batch/prices" \
+curl -X POST "http://127.0.0.1:5005/api/v1/stocks/batch/prices" \
   -H "Content-Type: application/json" \
   -d '{
     "codes": ["000001.SZ", "000002.SZ"],
@@ -150,7 +150,7 @@ GET /api/v1/stocks/{code}/financial?type=valuation&start_date={YYYY-MM-DD}&end_d
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=valuation&start_date=2025-09-20&end_date=2025-09-27"
+curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/financial?type=valuation&start_date=2025-09-20&end_date=2025-09-27"
 ```
 
 **响应示例:**
@@ -181,7 +181,7 @@ GET /api/v1/stocks/{code}/financial?type=indicator&start_date={YYYY-MM-DD}&end_d
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=indicator&start_date=2025-06-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/financial?type=indicator&start_date=2025-06-01&end_date=2025-09-30"
 ```
 
 **响应示例:**
@@ -224,13 +224,13 @@ GET /api/v1/transactions?user_id={user_id}&stock_code={code}&start_date={YYYY-MM
 **请求示例:**
 ```bash
 # 查询指定用户的交易记录
-curl "http://127.0.0.1:5000/api/v1/transactions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30&limit=5"
+curl "http://127.0.0.1:5005/api/v1/transactions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30&limit=5"
 
 # 查询指定股票的所有交易记录
-curl "http://127.0.0.1:5000/api/v1/transactions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/transactions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
 
 # 查询指定用户指定股票的交易记录
-curl "http://127.0.0.1:5000/api/v1/transactions?user_id=test_user&stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/transactions?user_id=test_user&stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
 ```
 
 ### 获取用户最近N天交易记录
@@ -240,7 +240,7 @@ GET /api/v1/transactions/recent?user_id={user_id}&days={int}&stock_code={code}&t
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/transactions/recent?user_id=test_user&days=7&limit=10"
+curl "http://127.0.0.1:5005/api/v1/transactions/recent?user_id=test_user&days=7&limit=10"
 ```
 
 **响应示例:**
@@ -280,13 +280,13 @@ GET /api/v1/positions?user_id={user_id}&stock_code={code}&start_date={YYYY-MM-DD
 **请求示例:**
 ```bash
 # 查询指定用户的持仓记录
-curl "http://127.0.0.1:5000/api/v1/positions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/positions?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
 
 # 查询指定股票的所有持仓记录
-curl "http://127.0.0.1:5000/api/v1/positions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/positions?stock_code=000001.SZ&start_date=2025-09-01&end_date=2025-09-30"
 
 # 查询指定用户指定股票的持仓记录
-curl "http://127.0.0.1:5000/api/v1/positions?user_id=test_user&stock_code=000001.SZ&position_date=2025-09-26"
+curl "http://127.0.0.1:5005/api/v1/positions?user_id=test_user&stock_code=000001.SZ&position_date=2025-09-26"
 ```
 
 ### 获取用户持仓汇总
@@ -296,7 +296,7 @@ GET /api/v1/positions/summary?user_id={user_id}&position_date={YYYY-MM-DD}
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/positions/summary?user_id=test_user"
+curl "http://127.0.0.1:5005/api/v1/positions/summary?user_id=test_user"
 ```
 
 **响应示例:**
@@ -338,10 +338,10 @@ GET /api/v1/accounts?user_id={user_id}&start_date={YYYY-MM-DD}&end_date={YYYY-MM
 **请求示例:**
 ```bash
 # 查询指定用户的账户信息
-curl "http://127.0.0.1:5000/api/v1/accounts?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
+curl "http://127.0.0.1:5005/api/v1/accounts?user_id=test_user&start_date=2025-09-01&end_date=2025-09-30"
 
 # 查询指定日期的账户信息
-curl "http://127.0.0.1:5000/api/v1/accounts?user_id=test_user&info_date=2025-09-26"
+curl "http://127.0.0.1:5005/api/v1/accounts?user_id=test_user&info_date=2025-09-26"
 ```
 
 **响应示例:**
@@ -378,7 +378,7 @@ GET /api/v1/stocks/{code}/financial?type=summary&start_date={YYYY-MM-DD}&end_dat
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/stocks/000001.SZ/financial?type=summary"
+curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/financial?type=summary"
 ```
 
 **响应包含:**
@@ -397,7 +397,7 @@ GET /api/v1/database/info
 
 **请求示例:**
 ```bash
-curl "http://127.0.0.1:5000/api/v1/database/info"
+curl "http://127.0.0.1:5005/api/v1/database/info"
 ```
 
 ## 支持状况总结
@@ -425,7 +425,7 @@ curl "http://127.0.0.1:5000/api/v1/database/info"
    ```
 4. **数据类型**: JSON响应中的数值类型已正确转换，避免序列化错误 ✅ **已修复**
 5. **性能**: 建议在查询大量数据时使用分页参数
-6. **服务器端口**: 使用端口5000启动API服务器（修复版本）
+6. **服务器端口**: 使用端口5005启动API服务器（修复版本）
 
 ## 缺少的功能
 
