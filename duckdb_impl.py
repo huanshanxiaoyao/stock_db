@@ -452,11 +452,12 @@ class DuckDBDatabase(DatabaseInterface):
         )
         """
         
-        # 融资融券数据表
+        # 融资融券和资金流向数据表 (MTSS + Money Flow)
         mtss_data_sql = """
         CREATE TABLE IF NOT EXISTS mtss_data (
             code VARCHAR,
             day DATE,
+            -- 融资融券数据 (Source2: get_mtss from JQData)
             fin_value DOUBLE,
             fin_buy_value DOUBLE,
             fin_refund_value DOUBLE,
@@ -466,10 +467,53 @@ class DuckDBDatabase(DatabaseInterface):
             sec_sell_vol DOUBLE,
             sec_refund_vol DOUBLE,
             fin_sec_value DOUBLE,
+            -- 资金流向数据 (Source1: get_money_flow_pro from JQData)
+            inflow_xl DOUBLE,    -- 超大单流入
+            inflow_l DOUBLE,     -- 大单流入
+            inflow_m DOUBLE,     -- 中单流入
+            inflow_s DOUBLE,     -- 小单流入
+            outflow_xl DOUBLE,   -- 超大单流出
+            outflow_l DOUBLE,    -- 大单流出
+            outflow_m DOUBLE,    -- 中单流出
+            outflow_s DOUBLE,    -- 小单流出
+            netflow_xl DOUBLE,   -- 超大单净流入
+            netflow_l DOUBLE,    -- 大单净流入
+            netflow_m DOUBLE,    -- 中单净流入
+            netflow_s DOUBLE,    -- 小单净流入
             PRIMARY KEY (code, day)
         )
         """
         
+        # 每日基本指标数据表 - 基于Tushare daily_basic接口
+        daily_basic_sql = """
+        CREATE TABLE IF NOT EXISTS daily_basic (
+            code VARCHAR,
+            day DATE,
+            -- 价格数据
+            close DOUBLE,                  -- 当日收盘价
+            -- 换手率
+            turnover_rate DOUBLE,          -- 换手率(%)
+            turnover_rate_f DOUBLE,        -- 换手率(自由流通股)(%)
+            volume_ratio DOUBLE,           -- 量比
+            -- 估值指标
+            pe DOUBLE,                     -- 市盈率(总市值/净利润, 亏损的PE为空)
+            pe_ttm DOUBLE,                 -- 市盈率(TTM)
+            pb DOUBLE,                     -- 市净率(总市值/净资产)
+            ps DOUBLE,                     -- 市销率
+            ps_ttm DOUBLE,                 -- 市销率(TTM)
+            dv_ratio DOUBLE,               -- 股息率(%)
+            dv_ttm DOUBLE,                 -- 股息率(TTM)(%)
+            -- 股本数据
+            total_share DOUBLE,            -- 总股本(万股)
+            float_share DOUBLE,            -- 流通股本(万股)
+            free_share DOUBLE,             -- 自由流通股本(万股)
+            -- 市值数据
+            total_mv DOUBLE,               -- 总市值(万元)
+            circ_mv DOUBLE,                -- 流通市值(万元)
+            PRIMARY KEY (code, day)
+        )
+        """
+
         # 价格数据表 - 基于聚宽get_price接口字段
         price_data_sql = """
         CREATE TABLE IF NOT EXISTS price_data (
@@ -593,6 +637,7 @@ class DuckDBDatabase(DatabaseInterface):
             'valuation_data': valuation_data_sql,
             'indicator_data': indicator_data_sql,
             'mtss_data': mtss_data_sql,
+            'daily_basic': daily_basic_sql,
             'price_data': price_data_sql,
             'stock_list': stock_list_sql,
             'user_transactions': user_transactions_sql,
@@ -839,7 +884,7 @@ class DuckDBDatabase(DatabaseInterface):
             # 根据表类型选择日期字段
             if table_name == 'indicator_data':
                 date_field = 'pubDate'  # indicator_data表使用pubDate作为主要日期字段
-            elif table_name in ['valuation_data', 'mtss_data', 'price_data']:
+            elif table_name in ['valuation_data', 'mtss_data', 'daily_basic', 'price_data']:
                 date_field = 'day'
             else:
                 date_field = 'stat_date'
@@ -869,7 +914,7 @@ class DuckDBDatabase(DatabaseInterface):
             # 根据表类型选择日期字段
             if table_name == 'indicator_data':
                 date_field = 'pubDate'  # indicator_data表使用pubDate作为主要日期字段
-            elif table_name in ['valuation_data', 'mtss_data', 'price_data']:
+            elif table_name in ['valuation_data', 'mtss_data', 'daily_basic', 'price_data']:
                 date_field = 'day'
             else:
                 date_field = 'stat_date'

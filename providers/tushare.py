@@ -223,24 +223,26 @@ class TushareDataSource(BaseDataSource):
             return []
     
     
-    def get_market_data(self, codes: List[str], start_date: date, end_date: date, 
+    def get_market_data(self, codes: List[str], start_date: date, end_date: date,
                        data_type: str = DataType.PRICE_DATA) -> Optional[pd.DataFrame]:
         """获取市场数据
-        
+
         Args:
             codes: 股票代码列表
             start_date: 开始日期
             end_date: 结束日期
             data_type: 数据类型
-            
+
         Returns:
             Optional[pd.DataFrame]: 市场数据
         """
         if not self.is_authenticated():
             raise RuntimeError("Tushare数据源未认证")
-        
+
         if data_type == DataType.PRICE_DATA:
             return self._get_price_data(codes, start_date, end_date)
+        elif data_type == DataType.DAILY_BASIC:
+            return self._get_daily_basic_data(codes, start_date, end_date)
         else:
             self.logger.warning(f"不支持的市场数据类型: {data_type}")
             return None
@@ -326,7 +328,52 @@ class TushareDataSource(BaseDataSource):
             self.logger.error(f"获取价格数据失败: {e}")
             return None
     
-    
+    def _get_daily_basic_data(self, codes: List[str], start_date: date, end_date: date) -> Optional[pd.DataFrame]:
+        """获取每日基本指标数据"""
+        try:
+            all_data = []
+
+            # 批量处理股票代码
+            for i in range(0, len(codes), self.batch_size):
+                batch_codes = codes[i:i + self.batch_size]
+
+                for code in batch_codes:
+                    self._wait_for_rate_limit()
+
+                    ts_code = self._to_tushare_code(code)
+
+                    df = self.pro.daily_basic(
+                        ts_code=ts_code,
+                        start_date=start_date.strftime('%Y%m%d'),
+                        end_date=end_date.strftime('%Y%m%d'),
+                        fields='ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,'
+                               'pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,'
+                               'total_share,float_share,free_share,total_mv,circ_mv'
+                    )
+
+                    if df is not None and len(df) > 0:
+                        # 转换日期格式
+                        df['day'] = pd.to_datetime(df['trade_date'], format='%Y%m%d').dt.date
+                        df['code'] = code  # 使用标准格式代码
+
+                        # 删除原始的trade_date和ts_code字段
+                        df = df.drop(columns=['trade_date', 'ts_code'], errors='ignore')
+
+                        all_data.append(df)
+
+            if all_data:
+                result = pd.concat(all_data, ignore_index=True)
+                self.logger.info(f"获取到 {len(result)} 条每日基本指标数据")
+                return result
+            else:
+                self.logger.warning("未获取到每日基本指标数据")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"获取每日基本指标数据失败: {e}")
+            return None
+
+
     def _fill_bj_adjustment_factors(self, df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
         """为北交所股票填充复权因子数据"""
 

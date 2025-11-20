@@ -252,6 +252,7 @@ class DataType:
     VALUATION_DATA = 'valuation_data'
     INDICATOR_DATA = 'indicator_data'
     MTSS_DATA = 'mtss_data'
+    DAILY_BASIC = 'daily_basic'
     PRICE_DATA = 'price_data'
     
     # 用户相关数据表
@@ -271,7 +272,7 @@ class DataType:
     @classmethod
     def get_market_types(cls) -> List[str]:
         """获取市场数据类型"""
-        return [cls.VALUATION_DATA, cls.INDICATOR_DATA, cls.MTSS_DATA, cls.PRICE_DATA]
+        return [cls.VALUATION_DATA, cls.INDICATOR_DATA, cls.MTSS_DATA, cls.DAILY_BASIC, cls.PRICE_DATA]
     
     @classmethod
     def get_user_tables(cls) -> List[str]:

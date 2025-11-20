@@ -14,7 +14,7 @@ try:
     from jqdatasdk import (
     auth, get_price, get_all_securities, get_fundamentals, get_fundamentals_continuously,
     get_concept, get_trade_days, query, finance,
-    valuation, indicator, get_mtss
+    valuation, indicator, get_mtss, get_money_flow
 )
 except ImportError:
     print("警告: 未安装jqdatasdk，请先安装: pip install jqdatasdk")
@@ -373,30 +373,93 @@ class JQDataSource(BaseDataSource):
 
     
     def _get_mtss_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """获取融资融券数据 - 优化性能"""
-        self.logger.info(f"开始获取融资融券数据，股票数量: {len(codes)}")
-        dfs = []
-        
+        """获取融资融券和资金流向数据 - 合并Source1和Source2"""
+        self.logger.info(f"开始获取融资融券和资金流向数据，股票数量: {len(codes)}")
+        mtss_dfs = []
+        money_flow_dfs = []
+
         for idx, code in enumerate(codes):
             try:
                 jq_code = self._to_jq_code(code)
-                
-                df = get_mtss([jq_code], start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-                if not df.empty:
-                    df['code'] = df['code'].apply(self._from_jq_code)
-                    dfs.append(df)
-                
+
+                # 获取融资融券数据 (Source2)
+                try:
+                    mtss_df = get_mtss([jq_code], start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+                    if not mtss_df.empty:
+                        mtss_df['code'] = mtss_df['code'].apply(self._from_jq_code)
+                        mtss_df.rename(columns={'date': 'day'}, inplace=True)  # 统一日期字段名
+                        mtss_dfs.append(mtss_df)
+                except Exception as e:
+                    self.logger.warning(f"获取 {code} 融资融券数据失败: {e}")
+
+                # 获取资金流向数据 (Source1: get_money_flow)
+                try:
+                    # 计算需要获取的天数
+                    days_count = (end_date - start_date).days + 1
+                    money_flow_df = get_money_flow(
+                        jq_code,
+                        end_date=end_date.strftime('%Y-%m-%d'),
+                        count=days_count,
+                        fields=['date', 'sec_code', 'change_pct', 'net_amount_main', 'net_pct_main',
+                                'net_amount_xl', 'net_amount_l', 'net_amount_m', 'net_amount_s',
+                                'net_pct_xl', 'net_pct_l', 'net_pct_m', 'net_pct_s']
+                    )
+
+                    if money_flow_df is not None and not money_flow_df.empty:
+                        # 转换代码格式和日期字段
+                        money_flow_df['code'] = self._from_jq_code(jq_code)
+                        money_flow_df.rename(columns={'date': 'day'}, inplace=True)
+
+                        # 重命名字段以匹配数据库schema (使用净流入金额字段)
+                        money_flow_df.rename(columns={
+                            'net_amount_xl': 'netflow_xl',
+                            'net_amount_l': 'netflow_l',
+                            'net_amount_m': 'netflow_m',
+                            'net_amount_s': 'netflow_s'
+                        }, inplace=True)
+
+                        # 筛选出需要的列
+                        money_flow_cols = ['code', 'day', 'netflow_xl', 'netflow_l', 'netflow_m', 'netflow_s']
+                        available_cols = [col for col in money_flow_cols if col in money_flow_df.columns]
+                        money_flow_df = money_flow_df[available_cols]
+
+                        money_flow_dfs.append(money_flow_df)
+                except Exception as e:
+                    self.logger.warning(f"获取 {code} 资金流向数据失败: {e}")
+
                 # 优化延迟策略：减少延迟频率和时间
                 if idx % 200 == 0 and idx > 0:
-                    time.sleep(0.1)  # 减少延迟时间
+                    time.sleep(0.1)
                     self.logger.info(f"已处理 {idx+1}/{len(codes)} 个股票")
-                    
+
             except Exception as e:
-                self.logger.error(f"获取 {code} 融资融券数据失败: {e}")
+                self.logger.error(f"获取 {code} 数据失败: {e}")
                 continue
-        
-        result = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-        self.logger.info(f"成功获取 {len(result)} 条融资融券数据")
+
+        # 合并融资融券数据
+        mtss_result = pd.concat(mtss_dfs, ignore_index=True) if mtss_dfs else pd.DataFrame()
+        money_flow_result = pd.concat(money_flow_dfs, ignore_index=True) if money_flow_dfs else pd.DataFrame()
+
+        # 合并两个数据集
+        if not mtss_result.empty and not money_flow_result.empty:
+            # 确保day字段是date类型
+            if 'day' in mtss_result.columns:
+                mtss_result['day'] = pd.to_datetime(mtss_result['day']).dt.date
+            if 'day' in money_flow_result.columns:
+                money_flow_result['day'] = pd.to_datetime(money_flow_result['day']).dt.date
+
+            result = pd.merge(mtss_result, money_flow_result, on=['code', 'day'], how='outer')
+            self.logger.info(f"成功合并融资融券和资金流向数据，共 {len(result)} 条记录")
+        elif not mtss_result.empty:
+            result = mtss_result
+            self.logger.info(f"仅获取到融资融券数据，共 {len(result)} 条记录")
+        elif not money_flow_result.empty:
+            result = money_flow_result
+            self.logger.info(f"仅获取到资金流向数据，共 {len(result)} 条记录")
+        else:
+            result = pd.DataFrame()
+            self.logger.warning("未获取到任何融资融券或资金流向数据")
+
         return result
     
     def _get_price_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:

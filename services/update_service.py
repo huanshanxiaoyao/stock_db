@@ -387,7 +387,7 @@ class UpdateService:
         
         market_types = []
         # 检查是否包含具体的市场数据类型
-        for dt in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data']:
+        for dt in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic']:
             if dt in data_types:
                 market_types.append(dt)
         
@@ -695,7 +695,7 @@ class UpdateService:
         
         return None
     
-    def _fetch_market_data(self, code: str, data_type: str, 
+    def _fetch_market_data(self, code: str, data_type: str,
                       start_date: date, end_date: date) -> Optional[pd.DataFrame]:
         """从数据源获取市场数据，仅使用首选数据源"""
         # 仅尝试首选数据源
@@ -708,11 +708,13 @@ class UpdateService:
                 result = source.get_market_data([code], start_date, end_date, DataType.INDICATOR_DATA)
             elif data_type == DataType.MTSS_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.MTSS_DATA)
+            elif data_type == DataType.DAILY_BASIC:
+                result = source.get_market_data([code], start_date, end_date, DataType.DAILY_BASIC)
             elif data_type == DataType.PRICE_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
             else:
                 result = None
-            
+
             if result is not None and not result.empty:
                 return result
 
