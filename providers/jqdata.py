@@ -474,6 +474,10 @@ class JQDataSource(BaseDataSource):
         mtss_result = pd.concat(mtss_dfs, ignore_index=True) if mtss_dfs else pd.DataFrame()
         money_flow_result = pd.concat(money_flow_dfs, ignore_index=True) if money_flow_dfs else pd.DataFrame()
 
+        # 统计各数据源的股票代码
+        mtss_codes = set(mtss_result['code'].unique()) if not mtss_result.empty and 'code' in mtss_result.columns else set()
+        money_flow_codes = set(money_flow_result['code'].unique()) if not money_flow_result.empty and 'code' in money_flow_result.columns else set()
+
         # 合并两个数据集
         if not mtss_result.empty and not money_flow_result.empty:
             # 确保day字段是date类型
@@ -483,13 +487,20 @@ class JQDataSource(BaseDataSource):
                 money_flow_result['day'] = pd.to_datetime(money_flow_result['day']).dt.date
 
             result = pd.merge(mtss_result, money_flow_result, on=['code', 'day'], how='outer')
+            # 显示只有单一数据源的股票
+            only_mtss = mtss_codes - money_flow_codes
+            only_money_flow = money_flow_codes - mtss_codes
+            if only_mtss:
+                self.logger.info(f"仅有融资融券数据的股票({len(only_mtss)}只): {list(only_mtss)[:10]}{'...' if len(only_mtss) > 10 else ''}")
+            if only_money_flow:
+                self.logger.info(f"仅有资金流向数据的股票({len(only_money_flow)}只): {list(only_money_flow)[:10]}{'...' if len(only_money_flow) > 10 else ''}")
             self.logger.info(f"成功合并融资融券和资金流向数据，共 {len(result)} 条记录")
         elif not mtss_result.empty:
             result = mtss_result
-            self.logger.info(f"仅获取到融资融券数据，共 {len(result)} 条记录")
+            self.logger.info(f"仅获取到融资融券数据，共 {len(result)} 条记录，股票: {list(mtss_codes)[:10]}{'...' if len(mtss_codes) > 10 else ''}")
         elif not money_flow_result.empty:
             result = money_flow_result
-            self.logger.info(f"仅获取到资金流向数据，共 {len(result)} 条记录")
+            self.logger.info(f"仅获取到资金流向数据，共 {len(result)} 条记录，股票: {list(money_flow_codes)[:10]}{'...' if len(money_flow_codes) > 10 else ''}")
         else:
             result = pd.DataFrame()
             self.logger.warning("未获取到任何融资融券或资金流向数据")
