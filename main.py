@@ -148,15 +148,23 @@ def action_info(args):
             if 'tables' in db_info:
                 for table_info in db_info['tables']:
                     if isinstance(table_info, dict) and 'table_name' in table_info:
-                        logger.info(f"{table_info['table_name']}:")
-                        if 'record_count' in table_info:
-                            logger.info(f"  记录数: {table_info['record_count']:,}")
-                        if 'columns' in table_info:
-                            logger.info(f"  列数: {len(table_info['columns'])}")
-                        logger.info("")  # 空行
-                
+                        table_name = table_info['table_name']
+                        record_count = table_info.get('record_count', 0)
+                        columns = table_info.get('columns', [])
+                        logger.info(f"\n{table_name} ({record_count:,} 条记录, {len(columns)} 列):")
+
+                        # 显示表结构
+                        if columns and args.show_columns:
+                            for col in columns:
+                                if isinstance(col, dict):
+                                    col_name = col.get('name', col.get('column_name', ''))
+                                    col_type = col.get('type', col.get('data_type', ''))
+                                    logger.info(f"    {col_name}: {col_type}")
+                                else:
+                                    logger.info(f"    {col}")
+
                 if 'total_records' in db_info:
-                    logger.info(f"数据库总记录数: {db_info['total_records']:,}")
+                    logger.info(f"\n数据库总记录数: {db_info['total_records']:,}")
             else:
                 logger.info("未找到表信息")
             
@@ -331,7 +339,8 @@ def main():
     
     # info命令
     info_parser = subparsers.add_parser('info', help='显示数据库信息')
-    
+    info_parser.add_argument('--show-columns', action='store_true', help='显示表结构（列名和类型）')
+
     # query命令
     query_parser = subparsers.add_parser('query', help='执行SQL查询')
     query_parser.add_argument('--sql', required=True, help='SQL查询语句')
