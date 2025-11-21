@@ -330,17 +330,22 @@ class TushareDataSource(BaseDataSource):
     
     def _get_daily_basic_data(self, codes: List[str], start_date: date, end_date: date) -> Optional[pd.DataFrame]:
         """获取每日基本指标数据"""
+        self.logger.info(f"Tushare开始获取daily_basic数据，股票数量: {len(codes)}，日期范围: {start_date} 到 {end_date}")
         try:
             all_data = []
 
             # 批量处理股票代码
             for i in range(0, len(codes), self.batch_size):
                 batch_codes = codes[i:i + self.batch_size]
+                self.logger.info(f"处理批次 {i//self.batch_size + 1}，股票数量: {len(batch_codes)}")
 
-                for code in batch_codes:
+                for idx, code in enumerate(batch_codes):
                     self._wait_for_rate_limit()
 
                     ts_code = self._to_tushare_code(code)
+
+                    if (idx + 1) % 10 == 0:
+                        self.logger.info(f"已处理 {idx + 1}/{len(batch_codes)} 只股票")
 
                     df = self.pro.daily_basic(
                         ts_code=ts_code,
@@ -363,14 +368,16 @@ class TushareDataSource(BaseDataSource):
 
             if all_data:
                 result = pd.concat(all_data, ignore_index=True)
-                self.logger.info(f"获取到 {len(result)} 条每日基本指标数据")
+                self.logger.info(f"✅ Tushare成功获取 {len(result)} 条每日基本指标数据，涉及 {len(codes)} 只股票")
                 return result
             else:
-                self.logger.warning("未获取到每日基本指标数据")
+                self.logger.warning(f"⚠️ Tushare未获取到任何每日基本指标数据，请检查: 1) Tushare认证, 2) 日期范围, 3) 股票代码")
                 return None
 
         except Exception as e:
-            self.logger.error(f"获取每日基本指标数据失败: {e}")
+            self.logger.error(f"❌ Tushare获取每日基本指标数据失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
 
 

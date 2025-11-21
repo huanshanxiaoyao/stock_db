@@ -81,7 +81,9 @@ SUPPORTED_TABLES = [
     DataType.INCOME_STATEMENT,
     DataType.CASHFLOW_STATEMENT,
     DataType.INDICATOR_DATA,
-    DataType.VALUATION_DATA
+    DataType.VALUATION_DATA,
+    DataType.MTSS_DATA,
+    DataType.DAILY_BASIC
 ]
 
 def setup_logging(log_level='INFO'):
@@ -193,14 +195,19 @@ def action_query(args):
     if not args.sql:
         logger.error("错误: 请提供SQL查询语句")
         return
-    
+
     # 检查SQL语句是否为只读查询
     sql_upper = args.sql.strip().upper()
-    if not sql_upper.startswith('SELECT'):
-        logger.error("错误: 只允许执行SELECT查询语句")
+
+    # 允许的只读命令
+    allowed_readonly_commands = ['SELECT', 'PRAGMA', 'SHOW', 'DESCRIBE', 'EXPLAIN']
+    is_allowed = any(sql_upper.startswith(cmd) for cmd in allowed_readonly_commands)
+
+    if not is_allowed:
+        logger.error("错误: 只允许执行只读查询语句 (SELECT, PRAGMA, SHOW, DESCRIBE, EXPLAIN)")
         return
-    
-    # 检查是否包含危险的SQL关键词
+
+    # 检查是否包含危险的SQL关键词（即使在PRAGMA等语句中也不允许）
     dangerous_keywords = ['DELETE', 'UPDATE', 'INSERT', 'CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'REPLACE']
     for keyword in dangerous_keywords:
         if keyword in sql_upper:
@@ -242,6 +249,53 @@ def action_check_data(args):
         logger.error(f"数据质量检查失败: {e}")
         logging.exception("详细错误信息:")
         return 1
+
+def action_recreate_table(args):
+    """重建数据表"""
+    if not args.confirm:
+        logger.error("错误: 此操作将删除表中的所有数据！")
+        logger.error("如果确认要重建表，请添加 --confirm 参数")
+        logger.error(f"示例: python main.py recreate-table --table {args.table} --confirm")
+        return
+
+    table_name = args.table
+    logger.warning(f"警告: 即将删除并重建表 '{table_name}'，所有数据将丢失！")
+
+    api = create_api(db_path=args.db_path)
+
+    try:
+        import duckdb
+
+        # 直接使用DuckDB连接删除表
+        conn = duckdb.connect(args.db_path)
+
+        # 检查表是否存在
+        result = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table_name]).fetchall()
+        if not result:
+            # DuckDB uses different system tables
+            result = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_name=?", [table_name]).fetchall()
+
+        logger.info(f"删除旧表 '{table_name}'...")
+        conn.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+        logger.info(f"表 '{table_name}' 已删除")
+
+        conn.close()
+
+        # 重新初始化数据库（这会创建新表）
+        logger.info(f"创建新表 '{table_name}'...")
+        api.initialize()
+        logger.info(f"表 '{table_name}' 已重建完成")
+
+        # 显示新表结构
+        logger.info("\n新表结构:")
+        result = api.query(f"PRAGMA table_info({table_name})")
+        logger.info(result.to_string(index=False))
+
+    except Exception as e:
+        logger.error(f"重建表失败: {e}")
+        logging.exception("详细错误信息:")
+    finally:
+        api.close()
 
 def main():
     """
@@ -326,7 +380,12 @@ def main():
     account_daily_parser.add_argument('--account-ids', nargs='+', help='指定账户ID列表，不指定则导入所有账户')
     account_daily_parser.add_argument('--data-path', help='数据源路径，默认为 ~/myqmt_admin/data/account 或环境变量 STOCK_ACCOUNT_DATA_PATH')
     account_daily_parser.add_argument('--overwrite', action='store_true', help='覆盖已存在的数据')
-    
+
+    # recreate-table命令
+    recreate_parser = subparsers.add_parser('recreate-table', help='重建数据表（删除旧表并创建新表）')
+    recreate_parser.add_argument('--table', required=True, help='要重建的表名')
+    recreate_parser.add_argument('--confirm', action='store_true', help='确认删除表（必须指定此参数才能执行）')
+
     args = parser.parse_args()
     
     # 设置日志
@@ -353,6 +412,7 @@ def main():
         'import-positions': action_import_positions,
         'positions-summary': action_positions_summary,
         'import-account-data-daily': action_import_account_data_daily,
+        'recreate-table': action_recreate_table,
     }
     
     action_func = action_map.get(args.action)

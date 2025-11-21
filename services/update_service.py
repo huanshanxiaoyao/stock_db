@@ -346,7 +346,50 @@ class UpdateService:
             max_workers=max_workers,
             end_date=end_date
         )
-    
+
+    def update_daily_basic(self, codes: List[str], force_full_update: bool = False,
+                           end_date: Optional[date] = None) -> Dict[str, Any]:
+        """更新daily_basic数据，使用Tushare数据源"""
+        self.logger.info(f"准备更新 {len(codes)} 只股票的daily_basic数据")
+
+        tushare_source = self.data_sources.sources.get('tushare')
+        if not tushare_source or not tushare_source.is_authenticated():
+            return {'success': False, 'message': 'Tushare数据源未认证'}
+
+        # 确定日期范围
+        if end_date is None:
+            end_date = date.today()
+
+        if force_full_update:
+            start_date = date(2018, 1, 1)  # Tushare daily_basic 数据起始日期
+        else:
+            # 获取最新日期
+            latest = self.db.get_latest_date('daily_basic')
+            start_date = latest + timedelta(days=1) if latest else date(2018, 1, 1)
+
+        if start_date > end_date:
+            self.logger.info("daily_basic数据已是最新")
+            return {'success': True, 'message': '数据已是最新'}
+
+        self.logger.info(f"daily_basic更新日期范围: {start_date} 到 {end_date}")
+
+        success_count = 0
+        failed_codes = []
+
+        for i, code in enumerate(codes):
+            try:
+                df = tushare_source.get_market_data([code], start_date, end_date, DataType.DAILY_BASIC)
+                if df is not None and not df.empty:
+                    self.db.save_dataframe(df, DataType.DAILY_BASIC)
+                    success_count += 1
+                if (i + 1) % 100 == 0:
+                    self.logger.info(f"已处理 {i+1}/{len(codes)} 只股票")
+            except Exception as e:
+                self.logger.warning(f"更新 {code} 的daily_basic失败: {e}")
+                failed_codes.append(code)
+
+        self.logger.info(f"daily_basic更新完成: {success_count}/{len(codes)} 成功")
+        return {'success': True, 'updated': success_count, 'failed': failed_codes}
 
 
     # ==================== 定时更新服务 ====================
@@ -698,6 +741,22 @@ class UpdateService:
     def _fetch_market_data(self, code: str, data_type: str,
                       start_date: date, end_date: date) -> Optional[pd.DataFrame]:
         """从数据源获取市场数据，仅使用首选数据源"""
+
+        # Special handling: DAILY_BASIC always uses Tushare
+        if data_type == DataType.DAILY_BASIC:
+            if 'tushare' in self.data_sources.sources:
+                source = self.data_sources.sources['tushare']
+                if not source.is_authenticated():
+                    self.logger.error(f"Tushare数据源未认证，无法获取daily_basic数据")
+                    return None
+                self.logger.debug(f"使用Tushare获取daily_basic: {code}")
+                result = source.get_market_data([code], start_date, end_date, DataType.DAILY_BASIC)
+                if result is not None and not result.empty:
+                    return result
+            else:
+                self.logger.error("Tushare数据源未配置")
+            return None
+
         # 仅尝试首选数据源
         preferred_source_name = self.data_sources.get_preferred_source_for_stock(code)
         if preferred_source_name and preferred_source_name in self.data_sources.sources:
@@ -708,8 +767,6 @@ class UpdateService:
                 result = source.get_market_data([code], start_date, end_date, DataType.INDICATOR_DATA)
             elif data_type == DataType.MTSS_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.MTSS_DATA)
-            elif data_type == DataType.DAILY_BASIC:
-                result = source.get_market_data([code], start_date, end_date, DataType.DAILY_BASIC)
             elif data_type == DataType.PRICE_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
             else:

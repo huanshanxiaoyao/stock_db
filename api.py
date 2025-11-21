@@ -35,7 +35,12 @@ def load_credentials():
                     line = line.strip()
                     if line and not line.startswith('#') and '=' in line:
                         key, value = line.split('=', 1)
-                        os.environ[key.strip()] = value.strip()
+                        value = value.strip()
+                        # 移除可能的引号
+                        if (value.startswith('"') and value.endswith('"')) or \
+                           (value.startswith("'") and value.endswith("'")):
+                            value = value[1:-1]
+                        os.environ[key.strip()] = value
         except Exception as e:
             logging.warning(f"读取.env文件失败: {e}")
     else:
@@ -59,18 +64,18 @@ class StockDataAPI:
     """股票数据存储平台主API类"""
     
     def __init__(self, db_path: Optional[str] = None, config: Optional[Dict[str, Any]] = None, use_replica: bool = True):
-        # 如果没有指定db_path，使用配置中的路径
-        if db_path is None:
-            config_obj = get_config()
-            db_path = config_obj.database.path
         """
         初始化量化数据API
-        
+
         Args:
             db_path: 数据库文件路径
             config: 配置字典，包含数据源配置等
             use_replica: 是否使用副本数据库模式
         """
+        # 如果没有指定db_path，使用配置中的路径
+        if db_path is None:
+            config_obj = get_config()
+            db_path = config_obj.database.path
         self.logger = logging.getLogger(__name__)
         self.use_replica = use_replica
         
@@ -134,7 +139,7 @@ class StockDataAPI:
         """注册数据源"""
         # 从.env文件获取认证信息
         credentials = load_credentials()
-        self.logger.info(f"加载认证信息: {credentials}, {sources_config}")
+        self.logger.info(f"加载认证信息: jq_user={'已配置' if credentials.get('jq_username') else '未配置'}, tushare={'已配置' if credentials.get('tushare_token') else '未配置'}")
         for source_config in sources_config:
             source_type = source_config.get('type')
             if source_type == 'jqdata':
@@ -160,24 +165,31 @@ class StockDataAPI:
             elif source_type == 'tushare':
                 # Tushare需要在初始化时传入token
                 tushare_config = {}
-                if credentials['tushare_token']:
-                    tushare_config['token'] = credentials['tushare_token']
-                
+                token = credentials.get('tushare_token')
+                self.logger.info(f"Tushare token长度: {len(token) if token else 0}")
+                if token:
+                    tushare_config['token'] = token
+
                 source = TushareDataSource(tushare_config)
                 self.data_sources.register_source(
-                    source_config['name'], 
-                    source, 
+                    source_config['name'],
+                    source,
                     source_config.get('default', False)
                 )
                 # 使用从.env获取的认证信息
-                if credentials['tushare_token']:
+                if token:
                     try:
-                        source.authenticate(token=credentials['tushare_token'])
-                        self.logger.info(f"Tushare数据源认证成功")
+                        auth_result = source.authenticate(token=token)
+                        if auth_result:
+                            self.logger.info(f"✅ Tushare数据源认证成功")
+                        else:
+                            self.logger.warning(f"⚠️ Tushare数据源认证返回False")
                     except Exception as e:
-                        self.logger.warning(f"Tushare数据源认证失败: {e}")
+                        self.logger.warning(f"❌ Tushare数据源认证失败: {e}")
+                        import traceback
+                        self.logger.warning(traceback.format_exc())
                 else:
-                    self.logger.warning("Tushare认证信息不完整，跳过认证")
+                    self.logger.warning("⚠️ Tushare认证信息不完整 (TUSHARE_TOKEN为空)，跳过认证")
     
     def _ensure_initialized(self) -> None:
         """确保已初始化"""
@@ -507,7 +519,27 @@ class StockDataAPI:
             end_date=end_date
         )
         return {'success': True, 'result': result}
-    
+
+    def update_daily_basic_data(self, codes: List[str], force_full_update: bool = False,
+                                end_date: Optional[date] = None) -> Dict[str, Any]:
+        """
+        更新daily_basic数据，使用Tushare数据源（适用于所有交易所）
+        """
+        self._ensure_initialized()
+        if not codes:
+            return {'success': False, 'message': '股票代码列表为空'}
+
+        tushare_source = self.data_sources.get_source('tushare')
+        if not tushare_source or not tushare_source.is_authenticated():
+            return {'success': False, 'message': 'tushare数据源未认证'}
+
+        result = self.update_service.update_daily_basic(
+            codes,
+            force_full_update=force_full_update,
+            end_date=end_date
+        )
+        return result
+
     def update_bj_stocks_data(self, codes: List[str], data_types: Optional[List[str]] = None,
                              force_full_update: bool = False, max_workers: Optional[int] = None,
                              end_date: Optional[date] = None) -> Dict[str, Any]:

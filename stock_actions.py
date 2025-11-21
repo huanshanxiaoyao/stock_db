@@ -21,7 +21,9 @@ SUPPORTED_TABLES = [
     DataType.INCOME_STATEMENT,
     DataType.CASHFLOW_STATEMENT,
     DataType.INDICATOR_DATA,
-    DataType.VALUATION_DATA
+    DataType.VALUATION_DATA,
+    DataType.MTSS_DATA,
+    DataType.DAILY_BASIC
 ]
 
 def action_daily(args):
@@ -58,7 +60,7 @@ def action_daily(args):
                     continue
 
                 # 将具体表名映射到数据类型
-                if table in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data']:
+                if table in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic']:
                     data_types.append(table)
 
             if not data_types:
@@ -169,14 +171,17 @@ def action_update_history(args):
             else:
                 # 非北交所股票使用默认数据源更新
                 result = api.update_data(stock_codes, data_types=[DataType.INDICATOR_DATA], force_full_update=True)
-        elif table_name == DataType.FUNDAMENTAL_DATA:
-            # 历史补齐：强制全量（基本面数据）
+        elif table_name == DataType.MTSS_DATA:
+            # 历史补齐：强制全量（融资融券和资金流向数据 - JQData）
             if getattr(args, 'bj_stocks', False):
-                # 北交所股票使用tushare数据源更新
-                result = api.update_bj_stocks_data(stock_codes, data_types=[DataType.FUNDAMENTAL_DATA], force_full_update=True)
+                result = api.update_bj_stocks_data(stock_codes, data_types=[DataType.MTSS_DATA], force_full_update=True)
             else:
-                # 非北交所股票使用默认数据源更新
-                result = api.update_data(stock_codes, data_types=[DataType.FUNDAMENTAL_DATA], force_full_update=True)
+                result = api.update_data(stock_codes, data_types=[DataType.MTSS_DATA], force_full_update=True)
+        elif table_name == DataType.DAILY_BASIC:
+            # 历史补齐：强制全量（每日基本指标数据 - Tushare）
+            logger.info(f"准备更新 daily_basic，股票数量: {len(stock_codes)}")
+            logger.info(f"示例股票代码: {stock_codes[:5] if len(stock_codes) > 5 else stock_codes}")
+            result = api.update_daily_basic_data(stock_codes, force_full_update=True)
         else:
             logger.warning(f"警告: 暂不支持更新表 {table_name}")
             continue

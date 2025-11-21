@@ -138,6 +138,8 @@ class StockDataAPIServer:
                     'stocks': '/api/v1/stocks',
                     'price': '/api/v1/stocks/{code}/price',
                     'financial': '/api/v1/stocks/{code}/financial',
+                    'mtss': '/api/v1/stocks/{code}/mtss',
+                    'daily_basic': '/api/v1/stocks/{code}/daily_basic',
                     'batch_prices': '/api/v1/stocks/batch/prices',
                     'transactions': '/api/v1/transactions',
                     'recent_transactions': '/api/v1/transactions/recent',
@@ -417,7 +419,141 @@ class StockDataAPIServer:
                     'success': False,
                     'error': str(e)
                 }), 500
-        
+
+        # 融资融券和资金流向数据 (MTSS)
+        @self.app.route('/api/v1/stocks/<code>/mtss', methods=['GET'])
+        def get_mtss_data(code: str):
+            """获取股票融资融券和资金流向数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取查询参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+                limit = request.args.get('limit', 100, type=int)
+
+                # 参数验证
+                if start_date:
+                    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+                else:
+                    start_date_obj = None
+
+                if end_date:
+                    end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                else:
+                    end_date_obj = None
+
+                # 构建SQL查询
+                sql = "SELECT * FROM mtss_data WHERE code = ?"
+                params = [code]
+
+                if start_date_obj:
+                    sql += " AND day >= ?"
+                    params.append(start_date_obj)
+
+                if end_date_obj:
+                    sql += " AND day <= ?"
+                    params.append(end_date_obj)
+
+                sql += f" ORDER BY day DESC LIMIT {limit}"
+
+                # 执行查询
+                data = api.query(sql, params)
+
+                if data.empty:
+                    return jsonify({
+                        'success': False,
+                        'error': f'未找到股票 {code} 的融资融券数据'
+                    }), 404
+
+                # 转换为JSON格式
+                result = safe_json_convert(data)
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'count': len(result)
+                })
+
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取融资融券数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 每日基本指标数据
+        @self.app.route('/api/v1/stocks/<code>/daily_basic', methods=['GET'])
+        def get_daily_basic_data(code: str):
+            """获取股票每日基本指标数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取查询参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+                limit = request.args.get('limit', 100, type=int)
+
+                # 参数验证
+                if start_date:
+                    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+                else:
+                    start_date_obj = None
+
+                if end_date:
+                    end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+                else:
+                    end_date_obj = None
+
+                # 构建SQL查询
+                sql = "SELECT * FROM daily_basic WHERE code = ?"
+                params = [code]
+
+                if start_date_obj:
+                    sql += " AND day >= ?"
+                    params.append(start_date_obj)
+
+                if end_date_obj:
+                    sql += " AND day <= ?"
+                    params.append(end_date_obj)
+
+                sql += f" ORDER BY day DESC LIMIT {limit}"
+
+                # 执行查询
+                data = api.query(sql, params)
+
+                if data.empty:
+                    return jsonify({
+                        'success': False,
+                        'error': f'未找到股票 {code} 的每日基本指标数据'
+                    }), 404
+
+                # 转换为JSON格式
+                result = safe_json_convert(data)
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'count': len(result)
+                })
+
+            except ValueError as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'参数错误: {e}'
+                }), 400
+            except Exception as e:
+                logger.error(f"获取每日基本指标数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
         # 批量价格数据
         @self.app.route('/api/v1/stocks/batch/price', methods=['POST'])
         def get_batch_price_data():

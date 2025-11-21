@@ -14,7 +14,7 @@ try:
     from jqdatasdk import (
     auth, get_price, get_all_securities, get_fundamentals, get_fundamentals_continuously,
     get_concept, get_trade_days, query, finance,
-    valuation, indicator, get_mtss, get_money_flow
+    valuation, indicator, get_mtss, get_money_flow, get_money_flow_pro
 )
 except ImportError:
     print("警告: 未安装jqdatasdk，请先安装: pip install jqdatasdk")
@@ -386,44 +386,78 @@ class JQDataSource(BaseDataSource):
                 try:
                     mtss_df = get_mtss([jq_code], start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
                     if not mtss_df.empty:
-                        mtss_df['code'] = mtss_df['code'].apply(self._from_jq_code)
-                        mtss_df.rename(columns={'date': 'day'}, inplace=True)  # 统一日期字段名
+                        # get_mtss returns 'sec_code' not 'code', need to rename first
+                        if 'sec_code' in mtss_df.columns:
+                            mtss_df.rename(columns={'sec_code': 'code'}, inplace=True)
+                        if 'code' in mtss_df.columns:
+                            mtss_df['code'] = mtss_df['code'].apply(self._from_jq_code)
+                        if 'date' in mtss_df.columns:
+                            mtss_df.rename(columns={'date': 'day'}, inplace=True)  # 统一日期字段名
                         mtss_dfs.append(mtss_df)
                 except Exception as e:
                     self.logger.warning(f"获取 {code} 融资融券数据失败: {e}")
 
-                # 获取资金流向数据 (Source1: get_money_flow)
+                # 获取资金流向数据 (Source1: get_money_flow_pro)
                 try:
                     # 计算需要获取的天数
                     days_count = (end_date - start_date).days + 1
-                    money_flow_df = get_money_flow(
+
+                    # Use get_money_flow_pro to get all 12 fields (inflow, outflow, netflow)
+                    # Note: date and sec_code are returned automatically, don't include in fields
+                    money_flow_df = get_money_flow_pro(
                         jq_code,
                         end_date=end_date.strftime('%Y-%m-%d'),
                         count=days_count,
-                        fields=['date', 'sec_code', 'change_pct', 'net_amount_main', 'net_pct_main',
-                                'net_amount_xl', 'net_amount_l', 'net_amount_m', 'net_amount_s',
-                                'net_pct_xl', 'net_pct_l', 'net_pct_m', 'net_pct_s']
+                        frequency='1d',
+                        fields=['inflow_xl', 'inflow_l', 'inflow_m', 'inflow_s',
+                                'outflow_xl', 'outflow_l', 'outflow_m', 'outflow_s',
+                                'netflow_xl', 'netflow_l', 'netflow_m', 'netflow_s']
                     )
 
                     if money_flow_df is not None and not money_flow_df.empty:
-                        # 转换代码格式和日期字段
-                        money_flow_df['code'] = self._from_jq_code(jq_code)
-                        money_flow_df.rename(columns={'date': 'day'}, inplace=True)
+                        # Reset index if date/time is in the index
+                        if 'date' in money_flow_df.index.names or money_flow_df.index.name == 'date':
+                            money_flow_df = money_flow_df.reset_index()
+                        if 'time' in money_flow_df.index.names or money_flow_df.index.name == 'time':
+                            money_flow_df = money_flow_df.reset_index()
 
-                        # 重命名字段以匹配数据库schema (使用净流入金额字段)
-                        money_flow_df.rename(columns={
-                            'net_amount_xl': 'netflow_xl',
-                            'net_amount_l': 'netflow_l',
-                            'net_amount_m': 'netflow_m',
-                            'net_amount_s': 'netflow_s'
-                        }, inplace=True)
+                        # Handle sec_code -> code conversion (code column already exists in this case)
+                        if 'sec_code' in money_flow_df.columns:
+                            if 'code' in money_flow_df.columns:
+                                # Both exist, drop sec_code and keep code
+                                money_flow_df.drop(columns=['sec_code'], inplace=True)
+                            else:
+                                # Only sec_code exists, rename and convert
+                                money_flow_df['code'] = money_flow_df['sec_code'].apply(self._from_jq_code)
+                                money_flow_df.drop(columns=['sec_code'], inplace=True)
 
-                        # 筛选出需要的列
-                        money_flow_cols = ['code', 'day', 'netflow_xl', 'netflow_l', 'netflow_m', 'netflow_s']
-                        available_cols = [col for col in money_flow_cols if col in money_flow_df.columns]
+                        # Apply code format conversion if code column exists
+                        if 'code' in money_flow_df.columns:
+                            money_flow_df['code'] = money_flow_df['code'].apply(self._from_jq_code)
+
+                        # Rename date/time to day for consistency
+                        # get_money_flow_pro returns 'time' not 'date'!
+                        if 'time' in money_flow_df.columns:
+                            money_flow_df.rename(columns={'time': 'day'}, inplace=True)
+                        elif 'date' in money_flow_df.columns:
+                            money_flow_df.rename(columns={'date': 'day'}, inplace=True)
+
+                        # Ensure day column exists
+                        if 'day' not in money_flow_df.columns:
+                            self.logger.error(f"money_flow_df 缺少 day 列。当前列: {money_flow_df.columns.tolist()}")
+                            continue
+
+                        # Select the columns we need (all 12 money flow fields + code + day)
+                        required_cols = ['code', 'day']
+                        money_flow_cols = ['inflow_xl', 'inflow_l', 'inflow_m', 'inflow_s',
+                                          'outflow_xl', 'outflow_l', 'outflow_m', 'outflow_s',
+                                          'netflow_xl', 'netflow_l', 'netflow_m', 'netflow_s']
+                        available_cols = required_cols + [col for col in money_flow_cols if col in money_flow_df.columns]
                         money_flow_df = money_flow_df[available_cols]
 
                         money_flow_dfs.append(money_flow_df)
+                    else:
+                        self.logger.debug(f"未获取到 {code} 的资金流向数据")
                 except Exception as e:
                     self.logger.warning(f"获取 {code} 资金流向数据失败: {e}")
 

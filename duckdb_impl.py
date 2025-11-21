@@ -457,29 +457,27 @@ class DuckDBDatabase(DatabaseInterface):
         CREATE TABLE IF NOT EXISTS mtss_data (
             code VARCHAR,
             day DATE,
-            -- 融资融券数据 (Source2: get_mtss from JQData)
-            fin_value DOUBLE,
-            fin_buy_value DOUBLE,
-            fin_refund_value DOUBLE,
-            sec_value DOUBLE,
-            sec_sell_value DOUBLE,
-            sec_refund_value DOUBLE,
-            sec_sell_vol DOUBLE,
-            sec_refund_vol DOUBLE,
-            fin_sec_value DOUBLE,
-            -- 资金流向数据 (Source1: get_money_flow_pro from JQData)
-            inflow_xl DOUBLE,    -- 超大单流入
-            inflow_l DOUBLE,     -- 大单流入
-            inflow_m DOUBLE,     -- 中单流入
-            inflow_s DOUBLE,     -- 小单流入
-            outflow_xl DOUBLE,   -- 超大单流出
-            outflow_l DOUBLE,    -- 大单流出
-            outflow_m DOUBLE,    -- 中单流出
-            outflow_s DOUBLE,    -- 小单流出
-            netflow_xl DOUBLE,   -- 超大单净流入
-            netflow_l DOUBLE,    -- 大单净流入
-            netflow_m DOUBLE,    -- 中单净流入
-            netflow_s DOUBLE,    -- 小单净流入
+            -- 融资融券数据 (Source2: get_mtss from JQData - 9 fields)
+            fin_value DOUBLE,              -- 融资余额(元)
+            fin_buy_value DOUBLE,          -- 融资买入额(元)
+            fin_refund_value DOUBLE,       -- 融资偿还额(元)
+            sec_value DOUBLE,              -- 融券余额(元)
+            sec_sell_value DOUBLE,         -- 融券卖出额(元)
+            sec_refund_value DOUBLE,       -- 融券偿还额(元)
+            fin_sec_value DOUBLE,          -- 融资融券余额(元)
+            -- 资金流向数据 (Source1: get_money_flow_pro from JQData - 12 fields)
+            inflow_xl DOUBLE,              -- 超大单流入
+            inflow_l DOUBLE,               -- 大单流入
+            inflow_m DOUBLE,               -- 中单流入
+            inflow_s DOUBLE,               -- 小单流入
+            outflow_xl DOUBLE,             -- 超大单流出
+            outflow_l DOUBLE,              -- 大单流出
+            outflow_m DOUBLE,              -- 中单流出
+            outflow_s DOUBLE,              -- 小单流出
+            netflow_xl DOUBLE,             -- 超大单净流入
+            netflow_l DOUBLE,              -- 大单净流入
+            netflow_m DOUBLE,              -- 中单净流入
+            netflow_s DOUBLE,              -- 小单净流入
             PRIMARY KEY (code, day)
         )
         """
