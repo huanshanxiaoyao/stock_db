@@ -665,9 +665,202 @@ class StockDataAPIServer:
                     'success': False,
                     'error': str(e)
                 }), 500
-        
-        
-        
+
+        # 批量估值数据
+        @self.app.route('/api/v1/stocks/batch/valuation', methods=['POST'])
+        def get_batch_valuation():
+            """批量获取股票估值数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+                fields = data.get('fields', ['code', 'day', 'pe_ratio', 'pb_ratio', 'market_cap',
+                                              'circulating_market_cap', 'turnover_ratio', 'dividend_ratio'])
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 确保code和day在字段列表中
+                if 'code' not in fields:
+                    fields.insert(0, 'code')
+                if 'day' not in fields:
+                    fields.insert(1, 'day')
+
+                # 构建SQL查询
+                field_str = ', '.join([f if f != 'day' else 'day as date' for f in fields])
+                field_str = field_str.replace('day as date', 'day as date')
+                codes_str = "', '".join(codes)
+
+                sql = f"SELECT {field_str} FROM valuation_data WHERE code IN ('{codes_str}')"
+
+                if start_date:
+                    sql += f" AND day >= '{start_date}'"
+                if end_date:
+                    sql += f" AND day <= '{end_date}'"
+
+                sql += " ORDER BY code, day"
+
+                # 执行查询
+                df = api.query(sql)
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取估值数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 批量每日基本指标数据
+        @self.app.route('/api/v1/stocks/batch/daily_basic', methods=['POST'])
+        def get_batch_daily_basic():
+            """批量获取股票每日基本指标数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+                # daily_basic默认返回所有字段
+                fields = data.get('fields', ['code', 'day', 'close', 'turnover_rate', 'turnover_rate_f',
+                                              'volume_ratio', 'pe', 'pe_ttm', 'pb', 'ps', 'ps_ttm',
+                                              'dv_ratio', 'dv_ttm', 'total_share', 'float_share',
+                                              'free_share', 'total_mv', 'circ_mv'])
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 确保code和day在字段列表中
+                if 'code' not in fields:
+                    fields.insert(0, 'code')
+                if 'day' not in fields:
+                    fields.insert(1, 'day')
+
+                # 构建SQL查询
+                field_str = ', '.join([f if f != 'day' else 'day as date' for f in fields])
+                field_str = field_str.replace('day as date', 'day as date')
+                codes_str = "', '".join(codes)
+
+                sql = f"SELECT {field_str} FROM daily_basic WHERE code IN ('{codes_str}')"
+
+                if start_date:
+                    sql += f" AND day >= '{start_date}'"
+                if end_date:
+                    sql += f" AND day <= '{end_date}'"
+
+                sql += " ORDER BY code, day"
+
+                # 执行查询
+                df = api.query(sql)
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取每日基本指标数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 批量融资融券和资金流向数据
+        @self.app.route('/api/v1/stocks/batch/mtss', methods=['POST'])
+        def get_batch_mtss():
+            """批量获取股票融资融券和资金流向数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+                fields = data.get('fields', ['code', 'day', 'fin_value', 'sec_value', 'fin_sec_value',
+                                              'netflow_xl', 'netflow_l', 'inflow_xl', 'inflow_l',
+                                              'inflow_m', 'inflow_s'])
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 确保code和day在字段列表中
+                if 'code' not in fields:
+                    fields.insert(0, 'code')
+                if 'day' not in fields:
+                    fields.insert(1, 'day')
+
+                # 构建SQL查询
+                field_str = ', '.join([f if f != 'day' else 'day as date' for f in fields])
+                field_str = field_str.replace('day as date', 'day as date')
+                codes_str = "', '".join(codes)
+
+                sql = f"SELECT {field_str} FROM mtss_data WHERE code IN ('{codes_str}')"
+
+                if start_date:
+                    sql += f" AND day >= '{start_date}'"
+                if end_date:
+                    sql += f" AND day <= '{end_date}'"
+
+                sql += " ORDER BY code, day"
+
+                # 执行查询
+                df = api.query(sql)
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取融资融券和资金流向数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+
+
         # ==================== 用户交易记录相关API ====================
         
         # 获取用户交易记录

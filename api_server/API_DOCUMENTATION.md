@@ -172,6 +172,66 @@ curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/financial?type=valuation&sta
 }
 ```
 
+### 批量获取估值数据
+```http
+POST /api/v1/stocks/batch/valuation
+Content-Type: application/json
+
+{
+  "codes": ["000001.SZ", "600516.SH"],
+  "start_date": "2025-11-15",
+  "end_date": "2025-11-22",
+  "fields": ["code", "day", "pe_ratio", "pb_ratio", "market_cap"]
+}
+```
+
+**参数:**
+- `codes`: 股票代码列表（必填）
+- `start_date`: 开始日期，YYYY-MM-DD格式（可选）
+- `end_date`: 结束日期，YYYY-MM-DD格式（可选）
+- `fields`: 字段列表（可选，默认包含 pe_ratio, pb_ratio, market_cap, circulating_market_cap, turnover_ratio, dividend_ratio）
+
+**请求示例:**
+```bash
+curl -X POST "http://127.0.0.1:5005/api/v1/stocks/batch/valuation" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codes": ["000001.SZ", "600516.SH"],
+    "start_date": "2025-11-15",
+    "end_date": "2025-11-22"
+  }'
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "code": "000001.SZ",
+      "date": "2025-11-15",
+      "pe_ratio": 5.12,
+      "pb_ratio": 0.51,
+      "market_cap": 2250.5,
+      "circulating_market_cap": 2250.5,
+      "turnover_ratio": 0.42,
+      "dividend_ratio": 3.2
+    },
+    {
+      "code": "000001.SZ",
+      "date": "2025-11-18",
+      "pe_ratio": 5.15,
+      "pb_ratio": 0.52,
+      "market_cap": 2260.3,
+      "circulating_market_cap": 2260.3,
+      "turnover_ratio": 0.38,
+      "dividend_ratio": 3.2
+    }
+  ],
+  "count": 2
+}
+```
+
 ## 4. indicator_data 表 ✅ 完全支持
 
 ### 获取指标数据（支持股票代码+日期范围）
@@ -205,7 +265,7 @@ curl "http://127.0.0.1:5005/api/v1/stocks/000001.SZ/financial?type=indicator&sta
 }
 ```
 
-## 5. user_transactions 表 ✅ 完全支持
+## 7. user_transactions 表 ✅ 完全支持
 
 ### 获取用户交易记录（支持user_id+日期范围 或 股票代码+日期范围）
 ```http
@@ -270,7 +330,7 @@ curl "http://127.0.0.1:5005/api/v1/transactions/recent?user_id=test_user&days=7&
 }
 ```
 
-## 6. user_positions 表 ✅ 完全支持
+## 8. user_positions 表 ✅ 完全支持
 
 ### 获取用户持仓记录（支持user_id+日期范围 或 股票代码+日期范围）
 ```http
@@ -328,7 +388,7 @@ curl "http://127.0.0.1:5005/api/v1/positions/summary?user_id=test_user"
 }
 ```
 
-## 7. user_account_info 表 ✅ 完全支持
+## 9. user_account_info 表 ✅ 完全支持
 
 ### 获取用户账户信息（支持user_id+日期范围）
 ```http
@@ -369,6 +429,134 @@ curl "http://127.0.0.1:5005/api/v1/accounts?user_id=test_user&info_date=2025-09-
 }
 ```
 
+## 5. mtss_data 表 (融资融券和资金流向) ✅ 完全支持
+
+### 批量获取融资融券和资金流向数据
+```http
+POST /api/v1/stocks/batch/mtss
+Content-Type: application/json
+
+{
+  "codes": ["000001.SZ", "600516.SH"],
+  "start_date": "2025-11-15",
+  "end_date": "2025-11-22",
+  "fields": ["code", "day", "fin_value", "netflow_xl", "netflow_l"]
+}
+```
+
+**参数:**
+- `codes`: 股票代码列表（必填）
+- `start_date`: 开始日期，YYYY-MM-DD格式（可选）
+- `end_date`: 结束日期，YYYY-MM-DD格式（可选）
+- `fields`: 字段列表（可选，默认包含融资融券余额和资金流向指标）
+
+**请求示例:**
+```bash
+curl -X POST "http://127.0.0.1:5005/api/v1/stocks/batch/mtss" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codes": ["000001.SZ", "600516.SH"],
+    "start_date": "2025-11-15",
+    "end_date": "2025-11-22"
+  }'
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "code": "000001.SZ",
+      "date": "2025-11-15",
+      "fin_value": 5234567890.5,
+      "sec_value": 123456789.2,
+      "fin_sec_value": 5358024679.7,
+      "netflow_xl": 12345678.5,
+      "netflow_l": -9876543.2,
+      "inflow_xl": 234567890.5,
+      "inflow_l": 123456789.3,
+      "inflow_m": 98765432.1,
+      "inflow_s": 45678901.2
+    }
+  ],
+  "count": 1
+}
+```
+
+**可用字段:**
+- 融资融券: `fin_value`, `fin_buy_value`, `fin_refund_value`, `sec_value`, `sec_sell_value`, `sec_refund_value`, `fin_sec_value`
+- 资金流向: `inflow_xl`, `inflow_l`, `inflow_m`, `inflow_s`, `outflow_xl`, `outflow_l`, `outflow_m`, `outflow_s`, `netflow_xl`, `netflow_l`, `netflow_m`, `netflow_s`
+
+## 6. daily_basic 表 (每日基本指标) ✅ 完全支持
+
+### 批量获取每日基本指标数据
+```http
+POST /api/v1/stocks/batch/daily_basic
+Content-Type: application/json
+
+{
+  "codes": ["000001.SZ", "600516.SH"],
+  "start_date": "2025-11-15",
+  "end_date": "2025-11-22",
+  "fields": ["code", "day", "close", "pe_ttm", "pb", "turnover_rate"]
+}
+```
+
+**参数:**
+- `codes`: 股票代码列表（必填）
+- `start_date`: 开始日期，YYYY-MM-DD格式（可选）
+- `end_date`: 结束日期，YYYY-MM-DD格式（可选）
+- `fields`: 字段列表（可选，默认返回所有字段）
+
+**请求示例:**
+```bash
+curl -X POST "http://127.0.0.1:5005/api/v1/stocks/batch/daily_basic" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codes": ["000001.SZ", "600516.SH"],
+    "start_date": "2025-11-20",
+    "end_date": "2025-11-22"
+  }'
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "code": "000001.SZ",
+      "date": "2025-11-20",
+      "close": 12.34,
+      "turnover_rate": 0.85,
+      "turnover_rate_f": 0.92,
+      "volume_ratio": 1.15,
+      "pe": 5.2,
+      "pe_ttm": 5.15,
+      "pb": 0.51,
+      "ps": 0.85,
+      "ps_ttm": 0.88,
+      "dv_ratio": 3.2,
+      "dv_ttm": 3.25,
+      "total_share": 1943477.89,
+      "float_share": 1943477.89,
+      "free_share": 1943477.89,
+      "total_mv": 23980000.5,
+      "circ_mv": 23980000.5
+    }
+  ],
+  "count": 1
+}
+```
+
+**可用字段:**
+- 价格: `close`
+- 换手率: `turnover_rate`, `turnover_rate_f`, `volume_ratio`
+- 估值: `pe`, `pe_ttm`, `pb`, `ps`, `ps_ttm`, `dv_ratio`, `dv_ttm`
+- 股本: `total_share`, `float_share`, `free_share`
+- 市值: `total_mv`, `circ_mv`
+
 ## 综合财务数据查询
 
 ### 获取所有财务数据
@@ -402,15 +590,17 @@ curl "http://127.0.0.1:5005/api/v1/database/info"
 
 ## 支持状况总结
 
-| 表名 | user_id+日期范围 | 股票代码+日期范围 | 状态 |
-|------|------------------|-------------------|------|
-| stock_list | N/A | ⚠️ 部分支持 | 缺少日期范围筛选 |
-| price_data | N/A | ✅ 完全支持 | 完整实现 |
-| valuation_data | N/A | ✅ 完全支持 | 完整实现 |
-| indicator_data | N/A | ✅ 完全支持 | 完整实现 |
-| user_transactions | ✅ 完全支持 | ✅ 完全支持 | 完整实现 |
-| user_positions | ✅ 完全支持 | ✅ 完全支持 | 完整实现 |
-| user_account_info | ✅ 完全支持 | N/A | 完整实现 |
+| 表名 | user_id+日期范围 | 股票代码+日期范围 | 批量查询 | 状态 |
+|------|------------------|-------------------|----------|------|
+| stock_list | N/A | ⚠️ 部分支持 | N/A | 缺少日期范围筛选 |
+| price_data | N/A | ✅ 完全支持 | ✅ 支持 | 完整实现 |
+| valuation_data | N/A | ✅ 完全支持 | ✅ 支持 | 完整实现 |
+| indicator_data | N/A | ✅ 完全支持 | N/A | 完整实现 |
+| mtss_data | N/A | ✅ 完全支持 | ✅ 支持 | 完整实现 |
+| daily_basic | N/A | ✅ 完全支持 | ✅ 支持 | 完整实现 |
+| user_transactions | ✅ 完全支持 | ✅ 完全支持 | N/A | 完整实现 |
+| user_positions | ✅ 完全支持 | ✅ 完全支持 | N/A | 完整实现 |
+| user_account_info | ✅ 完全支持 | N/A | N/A | 完整实现 |
 
 ## 注意事项
 
@@ -430,6 +620,19 @@ curl "http://127.0.0.1:5005/api/v1/database/info"
 ## 缺少的功能
 
 1. **stock_list表的日期范围查询**: 需要添加按上市日期、退市日期的筛选功能
-2. **批量财务数据查询**: 对valuation_data和indicator_data的批量查询接口
 
 这些功能可在后续版本中添加。
+
+## 批量查询功能
+
+已实现的批量查询接口：
+- ✅ `POST /api/v1/stocks/batch/prices` - 批量价格数据
+- ✅ `POST /api/v1/stocks/batch/valuation` - 批量估值数据
+- ✅ `POST /api/v1/stocks/batch/mtss` - 批量融资融券和资金流向数据
+- ✅ `POST /api/v1/stocks/batch/daily_basic` - 批量每日基本指标数据
+
+批量查询接口支持：
+- 一次请求查询多只股票的数据
+- 自定义日期范围
+- 可选字段列表，减少响应数据量
+- 统一的响应格式和错误处理
