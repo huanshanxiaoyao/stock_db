@@ -60,7 +60,8 @@ def action_daily(args):
                     continue
 
                 # 将具体表名映射到数据类型
-                if table in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic']:
+                if table in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic',
+                             DataType.INCOME_STATEMENT, DataType.CASHFLOW_STATEMENT, DataType.BALANCE_SHEET]:
                     data_types.append(table)
 
             if not data_types:
@@ -239,9 +240,9 @@ def action_update_table(args):
             if args.table == DataType.PRICE_DATA:
                 # 日级别增量补齐：从库里最新日期+1到 end_date_cutoff
                 result = api.update_data(stock_codes, data_types=[DataType.PRICE_DATA], end_date=end_date_cutoff)
-            elif args.table in ['balance_sheet', 'income_statement', 'cashflow_statement', 'financial_indicators']:
+            elif args.table in [DataType.BALANCE_SHEET, DataType.INCOME_STATEMENT, DataType.CASHFLOW_STATEMENT]:
                 # 财务类也按同一截止日策略（不强制全量）
-                result = api.update_data(stock_codes, data_types=['financial'], end_date=end_date_cutoff)
+                result = api.update_data(stock_codes, data_types=[args.table], end_date=end_date_cutoff)
             else:
                 logger.warning(f"警告: 暂不支持更新表 {args.table}")
                 return

@@ -77,9 +77,11 @@ from stock_actions import action_daily, action_update_history, action_update_tab
 SUPPORTED_TABLES = [
     DataType.STOCK_LIST,
     DataType.PRICE_DATA,
-    DataType.BALANCE_SHEET,
+    # 财务报表数据
     DataType.INCOME_STATEMENT,
     DataType.CASHFLOW_STATEMENT,
+    DataType.BALANCE_SHEET,
+    # 市场数据
     DataType.INDICATOR_DATA,
     DataType.VALUATION_DATA,
     DataType.MTSS_DATA,

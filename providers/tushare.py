@@ -420,6 +420,21 @@ class TushareDataSource(BaseDataSource):
 
         return df
 
+    def get_income_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取利润表数据（暂未实现）"""
+        self.logger.warning("Tushare数据源暂不支持利润表数据获取")
+        return pd.DataFrame()
+
+    def get_cashflow_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取现金流量表数据（暂未实现）"""
+        self.logger.warning("Tushare数据源暂不支持现金流量表数据获取")
+        return pd.DataFrame()
+
+    def get_balance_sheet(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取资产负债表数据（暂未实现）"""
+        self.logger.warning("Tushare数据源暂不支持资产负债表数据获取")
+        return pd.DataFrame()
+
     def close(self):
         """关闭连接"""
         # 只有在明确需要关闭时才重置认证状态

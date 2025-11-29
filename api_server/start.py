@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 import logging
+import platform
 from pathlib import Path
 
 # 添加项目根目录到Python路径
@@ -95,32 +96,58 @@ def main():
     
     try:
         if args.production:
-            # 生产环境：使用Gunicorn
-            logger.info("启动生产环境API服务器...")
-            import subprocess
-            
-            cmd = [
-                'gunicorn',
-                '--bind', f'{args.host}:{args.port}',
-                '--workers', str(args.workers),
-                '--worker-class', 'gevent',
-                '--worker-connections', '1000',
-                '--timeout', '30',
-                '--keepalive', '2',
-                '--max-requests', '1000',
-                '--max-requests-jitter', '100',
-                '--access-logfile', 'access.log',
-                '--error-logfile', 'error.log',
-                '--log-level', 'info',
-                'api_server.server:create_app()'
-            ]
-            
-            # 设置环境变量
-            env = os.environ.copy()
-            env['CONFIG_PATH'] = args.config
-            env['USE_REPLICA'] = 'false' if args.no_replica else 'true'
-            
-            subprocess.run(cmd, env=env)
+            # 生产环境：使用WSGI服务器
+            system = platform.system()
+
+            if system == "Windows":
+                # Windows系统：使用Waitress
+                logger.info("启动生产环境API服务器 (Windows - Waitress)...")
+                try:
+                    from waitress import serve
+                except ImportError:
+                    logger.error("未安装waitress。请运行: pip install waitress")
+                    logger.info("或者在Windows上使用开发模式: python api_server/start.py (不使用 --production)")
+                    sys.exit(1)
+
+                # 设置环境变量
+                os.environ['CONFIG_PATH'] = args.config
+                os.environ['USE_REPLICA'] = 'false' if args.no_replica else 'true'
+
+                # 创建应用
+                use_replica = not args.no_replica
+                server = StockDataAPIServer(args.config, use_replica=use_replica)
+
+                logger.info(f"使用Waitress在 {args.host}:{args.port} 上运行")
+                logger.info(f"Workers: {args.workers} (threads)")
+                serve(server.app, host=args.host, port=args.port, threads=args.workers)
+
+            else:
+                # Unix/Linux/macOS系统：使用Gunicorn
+                logger.info("启动生产环境API服务器 (Unix - Gunicorn)...")
+                import subprocess
+
+                cmd = [
+                    'gunicorn',
+                    '--bind', f'{args.host}:{args.port}',
+                    '--workers', str(args.workers),
+                    '--worker-class', 'gevent',
+                    '--worker-connections', '1000',
+                    '--timeout', '30',
+                    '--keepalive', '2',
+                    '--max-requests', '1000',
+                    '--max-requests-jitter', '100',
+                    '--access-logfile', 'access.log',
+                    '--error-logfile', 'error.log',
+                    '--log-level', 'info',
+                    'api_server.server:create_app()'
+                ]
+
+                # 设置环境变量
+                env = os.environ.copy()
+                env['CONFIG_PATH'] = args.config
+                env['USE_REPLICA'] = 'false' if args.no_replica else 'true'
+
+                subprocess.run(cmd, env=env)
             
         else:
             # 开发环境：使用Flask内置服务器

@@ -204,11 +204,15 @@ class JQDataSource(BaseDataSource):
                     finance.STK_INCOME_STATEMENT.pub_date >= start_date.strftime('%Y-%m-%d'),
                     finance.STK_INCOME_STATEMENT.pub_date <= end_date.strftime('%Y-%m-%d')
                 )
-                
+
                 df = finance.run_query(q)
                 if not df.empty:
                     # 转换代码格式
                     df['code'] = df['code'].apply(self._from_jq_code)
+                    # JQData使用report_date作为统计日期，我们统一为stat_date
+                    if 'report_date' in df.columns and 'stat_date' not in df.columns:
+                        # Use assign() to avoid DataFrame fragmentation warning
+                        df = df.assign(stat_date=df['report_date'])
                     dfs.append(df)
                 
                 # 控制请求频率
@@ -225,20 +229,24 @@ class JQDataSource(BaseDataSource):
     def _get_cashflow_statement_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
         """获取现金流量表数据"""
         dfs = []
-        
+
         for idx, code in enumerate(codes):
             try:
                 jq_code = self._to_jq_code(code)
-                
+
                 q = query(finance.STK_CASHFLOW_STATEMENT).filter(
                     finance.STK_CASHFLOW_STATEMENT.code == jq_code,
                     finance.STK_CASHFLOW_STATEMENT.pub_date >= start_date.strftime('%Y-%m-%d'),
                     finance.STK_CASHFLOW_STATEMENT.pub_date <= end_date.strftime('%Y-%m-%d')
                 )
-                
+
                 df = finance.run_query(q)
                 if not df.empty:
                     df['code'] = df['code'].apply(self._from_jq_code)
+                    # JQData使用report_date作为统计日期，我们统一为stat_date
+                    if 'report_date' in df.columns and 'stat_date' not in df.columns:
+                        # Use assign() to avoid DataFrame fragmentation warning
+                        df = df.assign(stat_date=df['report_date'])
                     dfs.append(df)
                 
                 if idx % 99 == 0 and idx > 0:
@@ -254,20 +262,24 @@ class JQDataSource(BaseDataSource):
     def _get_balance_sheet_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
         """获取资产负债表数据"""
         dfs = []
-        
+
         for idx, code in enumerate(codes):
             try:
                 jq_code = self._to_jq_code(code)
-                
+
                 q = query(finance.STK_BALANCE_SHEET).filter(
                     finance.STK_BALANCE_SHEET.code == jq_code,
                     finance.STK_BALANCE_SHEET.pub_date >= start_date.strftime('%Y-%m-%d'),
                     finance.STK_BALANCE_SHEET.pub_date <= end_date.strftime('%Y-%m-%d')
                 )
-                
+
                 df = finance.run_query(q)
                 if not df.empty:
                     df['code'] = df['code'].apply(self._from_jq_code)
+                    # JQData使用report_date作为统计日期，我们统一为stat_date
+                    if 'report_date' in df.columns and 'stat_date' not in df.columns:
+                        # Use assign() to avoid DataFrame fragmentation warning
+                        df = df.assign(stat_date=df['report_date'])
                     dfs.append(df)
                 
                 if idx % 99 == 0 and idx > 0:
@@ -279,7 +291,68 @@ class JQDataSource(BaseDataSource):
                 continue
         
         return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-    
+
+    # Public methods for financial statements
+    def get_income_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取利润表数据（公开方法）
+
+        Args:
+            codes: 股票代码列表（标准格式，如 '600000.SH'）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            包含利润表数据的DataFrame
+        """
+        if not self.is_authenticated():
+            raise RuntimeError("请先进行认证")
+
+        self._validate_date_range(start_date, end_date)
+        self._validate_codes(codes)
+
+        self.logger.info(f"获取利润表数据: {len(codes)} 只股票, 日期范围: {start_date} 到 {end_date}")
+        return self._get_income_statement_data(codes, start_date, end_date)
+
+    def get_cashflow_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取现金流量表数据（公开方法）
+
+        Args:
+            codes: 股票代码列表（标准格式，如 '600000.SH'）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            包含现金流量表数据的DataFrame
+        """
+        if not self.is_authenticated():
+            raise RuntimeError("请先进行认证")
+
+        self._validate_date_range(start_date, end_date)
+        self._validate_codes(codes)
+
+        self.logger.info(f"获取现金流量表数据: {len(codes)} 只股票, 日期范围: {start_date} 到 {end_date}")
+        return self._get_cashflow_statement_data(codes, start_date, end_date)
+
+    def get_balance_sheet(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取资产负债表数据（公开方法）
+
+        Args:
+            codes: 股票代码列表（标准格式，如 '600000.SH'）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            包含资产负债表数据的DataFrame
+        """
+        if not self.is_authenticated():
+            raise RuntimeError("请先进行认证")
+
+        self._validate_date_range(start_date, end_date)
+        self._validate_codes(codes)
+
+        self.logger.info(f"获取资产负债表数据: {len(codes)} 只股票, 日期范围: {start_date} 到 {end_date}")
+        return self._get_balance_sheet_data(codes, start_date, end_date)
+
     def get_market_data(self, codes: List[str], start_date: date, end_date: date, 
                        data_type: str) -> pd.DataFrame:
         """获取市场数据"""

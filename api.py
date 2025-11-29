@@ -407,7 +407,220 @@ class StockDataAPI:
 
         # 如果有数据返回字典，否则返回空DataFrame
         return result if result else pd.DataFrame()
-    
+
+    def get_income_statement(self, code: str, start_date: Optional[date] = None,
+                            end_date: Optional[date] = None) -> pd.DataFrame:
+        """获取利润表数据
+
+        Args:
+            code: 股票代码
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含利润表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        sql = "SELECT * FROM income_statement WHERE code = ?"
+        params = [code]
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"获取利润表数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_cashflow_statement(self, code: str, start_date: Optional[date] = None,
+                               end_date: Optional[date] = None) -> pd.DataFrame:
+        """获取现金流量表数据
+
+        Args:
+            code: 股票代码
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含现金流量表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        sql = "SELECT * FROM cashflow_statement WHERE code = ?"
+        params = [code]
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"获取现金流量表数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_balance_sheet(self, code: str, start_date: Optional[date] = None,
+                         end_date: Optional[date] = None) -> pd.DataFrame:
+        """获取资产负债表数据
+
+        Args:
+            code: 股票代码
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含资产负债表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        sql = "SELECT * FROM balance_sheet WHERE code = ?"
+        params = [code]
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"获取资产负债表数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_income_statement_batch(self, codes: List[str], start_date: Optional[date] = None,
+                                   end_date: Optional[date] = None) -> pd.DataFrame:
+        """批量获取利润表数据
+
+        Args:
+            codes: 股票代码列表
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含多只股票利润表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        if not codes:
+            return pd.DataFrame()
+
+        # 构建IN子句
+        placeholders = ','.join(['?' for _ in codes])
+        sql = f"SELECT * FROM income_statement WHERE code IN ({placeholders})"
+        params = list(codes)
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY code, stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"批量获取利润表数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_cashflow_statement_batch(self, codes: List[str], start_date: Optional[date] = None,
+                                     end_date: Optional[date] = None) -> pd.DataFrame:
+        """批量获取现金流量表数据
+
+        Args:
+            codes: 股票代码列表
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含多只股票现金流量表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        if not codes:
+            return pd.DataFrame()
+
+        # 构建IN子句
+        placeholders = ','.join(['?' for _ in codes])
+        sql = f"SELECT * FROM cashflow_statement WHERE code IN ({placeholders})"
+        params = list(codes)
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY code, stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"批量获取现金流量表数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_balance_sheet_batch(self, codes: List[str], start_date: Optional[date] = None,
+                                end_date: Optional[date] = None) -> pd.DataFrame:
+        """批量获取资产负债表数据
+
+        Args:
+            codes: 股票代码列表
+            start_date: 开始日期（基于pub_date）
+            end_date: 结束日期（基于pub_date）
+
+        Returns:
+            包含多只股票资产负债表数据的DataFrame
+        """
+        self._ensure_initialized()
+
+        if not codes:
+            return pd.DataFrame()
+
+        # 构建IN子句
+        placeholders = ','.join(['?' for _ in codes])
+        sql = f"SELECT * FROM balance_sheet WHERE code IN ({placeholders})"
+        params = list(codes)
+
+        if start_date:
+            sql += " AND pub_date >= ?"
+            params.append(start_date)
+
+        if end_date:
+            sql += " AND pub_date <= ?"
+            params.append(end_date)
+
+        sql += " ORDER BY code, stat_date DESC"
+
+        try:
+            return self.db.query(sql, params)
+        except Exception as e:
+            self.logger.error(f"批量获取资产负债表数据失败: {e}")
+            return pd.DataFrame()
+
     def get_price_data(self, code: str, start_date: Optional[date] = None,
                       end_date: Optional[date] = None) -> pd.DataFrame:
         """获取价格数据"""

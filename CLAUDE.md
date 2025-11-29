@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Operations
 - **Initialize database**: `python main.py init --db-path stock_data.duckdb`
-- **Daily data update**: `python main.py daily --tables price_data,financial`
+- **Daily data update**: `python main.py daily --tables price_data,income_statement,cashflow_statement,balance_sheet`
 - **Update stock list**: `python main.py update-stock-list`
 - **Query database**: `python main.py query --sql "SELECT * FROM stock_list LIMIT 10"`
 - **Database info**: `python main.py info`

@@ -428,17 +428,18 @@ class UpdateService:
             self.logger.error(f"没有获取到股票列表，exchange={exchange}")
             return results
         
-        market_types = []
-        # 检查是否包含具体的市场数据类型
-        for dt in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic']:
+        update_types = []
+        # 检查是否包含具体的数据类型（市场数据 + 财务报表）
+        for dt in ['price_data', 'valuation_data', 'indicator_data', 'mtss_data', 'daily_basic',
+                   DataType.INCOME_STATEMENT, DataType.CASHFLOW_STATEMENT, DataType.BALANCE_SHEET]:
             if dt in data_types:
-                market_types.append(dt)
-        
-        if market_types:
+                update_types.append(dt)
+
+        if update_types:
             if target_date:
                 # 指定日期更新：只更新指定日期的数据
-                market_result = {'successful': {}, 'failed': {}}
-                for data_type in market_types:
+                update_result = {'successful': {}, 'failed': {}}
+                for data_type in update_types:
                     self.logger.info(f"更新 {data_type} 数据，目标日期: {target_date}")
                     batch_result = self._update_multiple_stocks_batch(
                         target_stocks, [data_type],
@@ -447,13 +448,13 @@ class UpdateService:
                     # 手动设置开始日期为目标日期，覆盖批量更新的逻辑
                     self._single_date_update_override = target_date
 
-                    market_result['successful'].update(batch_result.get('successful', {}))
-                    market_result['failed'].update(batch_result.get('failed', {}))
+                    update_result['successful'].update(batch_result.get('successful', {}))
+                    update_result['failed'].update(batch_result.get('failed', {}))
             else:
                 # 增量更新：正常的每日更新逻辑
-                market_result = self.update_multiple_stocks(target_stocks, market_types)
-            results['market_update'] = market_result
-        
+                update_result = self.update_multiple_stocks(target_stocks, update_types)
+            results['update_result'] = update_result
+
         return results
 
     def _get_stocks_by_exchange(self, exchange: str) -> Optional[List[str]]:
@@ -691,9 +692,13 @@ class UpdateService:
                 continue
             
             #self.logger.debug(f"{code} 获取 {data_type} 数据: {start_date} -> {end_date_used}")
-            
+
             # 从数据源获取数据（修正：传入 end_date_used）
-            data = self._fetch_market_data(code, data_type, start_date, end_date_used)
+            # 根据数据类型选择合适的获取方法
+            if data_type in DataType.get_financial_types():
+                data = self._fetch_financial_data(code, data_type, start_date, end_date_used)
+            else:
+                data = self._fetch_market_data(code, data_type, start_date, end_date_used)
             
             if data is not None and not data.empty:
                 rows = len(data)
@@ -714,7 +719,7 @@ class UpdateService:
         return results
     
     
-    def _fetch_financial_data(self, code: str, data_type: str, 
+    def _fetch_financial_data(self, code: str, data_type: str,
                              start_date: date, end_date: date) -> Optional[pd.DataFrame]:
         """从数据源获取财务数据，智能选择数据源"""
         # 优先尝试首选数据源
@@ -722,20 +727,21 @@ class UpdateService:
         if preferred_source_name and preferred_source_name in self.data_sources.sources:
             source = self.data_sources.sources[preferred_source_name]
             try:
+                # 注意：财务报表方法接收的是代码列表，需要传入 [code]
                 if data_type == DataType.INCOME_STATEMENT:
-                    result = source.get_income_statement(code, start_date, end_date)
+                    result = source.get_income_statement([code], start_date, end_date)
                 elif data_type == DataType.CASHFLOW_STATEMENT:
-                    result = source.get_cashflow_statement(code, start_date, end_date)
+                    result = source.get_cashflow_statement([code], start_date, end_date)
                 elif data_type == DataType.BALANCE_SHEET:
-                    result = source.get_balance_sheet(code, start_date, end_date)
+                    result = source.get_balance_sheet([code], start_date, end_date)
                 else:
                     result = None
-                
+
                 if result is not None and not result.empty:
                     return result
             except Exception as e:
                 self.logger.warning(f"从首选数据源 {preferred_source_name} 获取 {data_type} 数据失败: {e}")
-        
+
         return None
     
     def _fetch_market_data(self, code: str, data_type: str,

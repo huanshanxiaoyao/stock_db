@@ -795,6 +795,70 @@ class StockDataAPIServer:
                     'error': str(e)
                 }), 500
 
+        # 批量财务指标数据
+        @self.app.route('/api/v1/stocks/batch/indicator', methods=['POST'])
+        def get_batch_indicator():
+            """批量获取股票财务指标数据（ROE、毛利率等）"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+                # indicator默认返回常用字段
+                fields = data.get('fields', ['code', 'pubDate', 'statDate', 'roe', 'roa',
+                                              'gross_profit_margin', 'net_profit_margin',
+                                              'inc_revenue_year_on_year', 'inc_net_profit_year_on_year'])
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 确保code和pubDate在字段列表中
+                if 'code' not in fields:
+                    fields.insert(0, 'code')
+                if 'pubDate' not in fields:
+                    fields.insert(1, 'pubDate')
+
+                # 构建SQL查询
+                field_str = ', '.join(fields)
+                codes_str = "', '".join(codes)
+
+                sql = f"SELECT {field_str} FROM indicator_data WHERE code IN ('{codes_str}')"
+
+                if start_date:
+                    sql += f" AND pubDate >= '{start_date}'"
+                if end_date:
+                    sql += f" AND pubDate <= '{end_date}'"
+
+                sql += " ORDER BY code, pubDate DESC"
+
+                # 执行查询
+                df = api.query(sql)
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取财务指标数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
         # 批量融资融券和资金流向数据
         @self.app.route('/api/v1/stocks/batch/mtss', methods=['POST'])
         def get_batch_mtss():
@@ -1270,7 +1334,120 @@ class StockDataAPIServer:
                     'success': False,
                     'error': str(e)
                 }), 500
-        
+
+        # ==================== 财务报表数据 ====================
+
+        # 利润表
+        @self.app.route('/api/v1/stocks/<code>/income_statement', methods=['GET'])
+        def get_income_statement(code: str):
+            """获取股票利润表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取查询参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+
+                # 参数验证
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 获取利润表数据
+                data = api.get_income_statement(
+                    code=code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(data) if not data.empty else [],
+                    'count': int(len(data))
+                })
+
+            except Exception as e:
+                logger.error(f"获取利润表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 现金流量表
+        @self.app.route('/api/v1/stocks/<code>/cashflow_statement', methods=['GET'])
+        def get_cashflow_statement(code: str):
+            """获取股票现金流量表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取查询参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+
+                # 参数验证
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 获取现金流量表数据
+                data = api.get_cashflow_statement(
+                    code=code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(data) if not data.empty else [],
+                    'count': int(len(data))
+                })
+
+            except Exception as e:
+                logger.error(f"获取现金流量表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 资产负债表
+        @self.app.route('/api/v1/stocks/<code>/balance_sheet', methods=['GET'])
+        def get_balance_sheet(code: str):
+            """获取股票资产负债表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取查询参数
+                start_date = request.args.get('start_date')
+                end_date = request.args.get('end_date')
+
+                # 参数验证
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 获取资产负债表数据
+                data = api.get_balance_sheet(
+                    code=code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(data) if not data.empty else [],
+                    'count': int(len(data))
+                })
+
+            except Exception as e:
+                logger.error(f"获取资产负债表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
         # 数据库信息
         @self.app.route('/api/v1/database/info', methods=['GET'])
         def get_database_info():

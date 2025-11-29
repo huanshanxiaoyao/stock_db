@@ -27,11 +27,25 @@ class DataSourceInterface(ABC):
     
     
     @abstractmethod
-    def get_market_data(self, codes: List[str], start_date: date, end_date: date, 
+    def get_market_data(self, codes: List[str], start_date: date, end_date: date,
                        data_type: str) -> pd.DataFrame:
         """获取市场数据"""
         pass
-    
+
+    @abstractmethod
+    def get_income_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取利润表数据"""
+        pass
+
+    @abstractmethod
+    def get_cashflow_statement(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取现金流量表数据"""
+        pass
+
+    @abstractmethod
+    def get_balance_sheet(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取资产负债表数据"""
+        pass
 
     @abstractmethod
     def close(self) -> None:
