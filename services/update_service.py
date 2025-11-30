@@ -655,13 +655,15 @@ class UpdateService:
         
         # 更新各类市场数据
         for data_type in data_types:
+            # 初始化 latest 变量
+            latest = None
+
             # 确定更新日期范围
             if force_full_update:
                 start_base = stock_info.get('start_date') or self.default_history_start_date
                 start_date = max(start_base, self.default_history_start_date)
                 end_date_used = end_date or stock_info.get('end_date', date.today())
             else:
-                latest = None
                 # 优先使用缓存的最新日期，避免重复数据库查询
                 if latest_dates_cache and data_type in latest_dates_cache:
                     latest = latest_dates_cache[data_type].get(code)
