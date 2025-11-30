@@ -817,15 +817,16 @@ class DuckDBDatabase(DatabaseInterface):
             self.logger.debug(f"[{table_name}] 对齐后DataFrame示例行(前{len(preview_cols)}列): {sample_row_preview}")
 
         # 显式注册并按表列顺序插入
+        # 使用 INSERT OR IGNORE 而不是 INSERT OR REPLACE 来保留所有版本（report_type）
         with self._lock:
             self.conn.register('tmp_df', aligned_df)
             try:
                 if table_cols:
                     cols_escaped = ', '.join(table_cols)
-                    self.conn.execute(f"INSERT OR REPLACE INTO {table_name} ({cols_escaped}) SELECT {cols_escaped} FROM tmp_df")
+                    self.conn.execute(f"INSERT OR IGNORE INTO {table_name} ({cols_escaped}) SELECT {cols_escaped} FROM tmp_df")
                 else:
                     # 回退：当无法获取表结构时，仍尝试按当前列顺序插入
-                    self.conn.execute(f"INSERT OR REPLACE INTO {table_name} SELECT * FROM tmp_df")
+                    self.conn.execute(f"INSERT OR IGNORE INTO {table_name} SELECT * FROM tmp_df")
             except Exception as e:
                 self.logger.error(f"[{table_name}] 执行插入失败: {e}")
                 self.logger.error(f"[{table_name}] 再次确认: 对齐后DataFrame列数={len(aligned_df.columns)}, 表列数={len(table_cols) if table_cols else '未知(获取失败)'}")

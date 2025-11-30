@@ -48,7 +48,7 @@ SAMPLE_STOCKS = 200
 SAMPLE_DATES = 50
 
 # Quick test mode - set via environment variable
-QUICK_TEST = True  # Set to False for full validation
+QUICK_TEST = False  # Set to False for full validation
 
 class DataValidator:
     def __init__(self, api):
