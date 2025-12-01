@@ -131,21 +131,30 @@ class DataValidator:
 
         df = finance.run_query(q)
         if not df.empty:
+            # Create a copy to avoid fragmentation warning
+            df = df.copy()
             df['code'] = df['code'].apply(self._from_jq_code)
             # Add stat_date mapping
             if 'report_date' in df.columns:
                 df['stat_date'] = df['report_date']
 
+            # Sort to match local database ordering
+            if 'report_type' in df.columns:
+                df = df.sort_values(['pub_date', 'stat_date', 'report_type']).reset_index(drop=True)
+            else:
+                df = df.sort_values(['pub_date', 'stat_date']).reset_index(drop=True)
+
         return df
 
     def fetch_local_data(self, table_name, stock_code, start_date, end_date):
-        """Fetch data from local database"""
+        """Fetch data from local database - fetch all rows (JQData also returns all versions)"""
+        # Fetch all rows - JQData now returns all versions too, so we should compare all
         sql = f"""
             SELECT * FROM {table_name}
             WHERE code = '{stock_code}'
             AND pub_date >= '{start_date}'
             AND pub_date <= '{end_date}'
-            ORDER BY pub_date
+            ORDER BY pub_date, stat_date, report_type
         """
         return self.api.query(sql)
 
@@ -237,16 +246,35 @@ class DataValidator:
                         return False
 
                 # Handle string/date comparison
-                elif str(jq_val) != str(local_val):
-                    logger.warning(f"{table_name} {stock_code} {date} row {idx} col '{col}': JQData={jq_val}, Local={local_val}")
-                    self.mismatches.append({
-                        'table': table_name,
-                        'code': stock_code,
-                        'date': date,
-                        'issue': f'Value mismatch in {col}: JQData={jq_val}, Local={local_val}'
-                    })
-                    self.total_checks += 1
-                    return False
+                else:
+                    # Special handling for date columns - compare only date portion
+                    if col in ['stat_date', 'report_date', 'pub_date', 'end_date']:
+                        # Convert both to date strings for comparison
+                        jq_date_str = str(jq_val).split(' ')[0] if jq_val else None
+                        local_date_str = str(local_val).split(' ')[0] if local_val else None
+
+                        if jq_date_str != local_date_str:
+                            logger.warning(f"{table_name} {stock_code} {date} row {idx} col '{col}': JQData={jq_val}, Local={local_val}")
+                            self.mismatches.append({
+                                'table': table_name,
+                                'code': stock_code,
+                                'date': date,
+                                'issue': f'Value mismatch in {col}: JQData={jq_val}, Local={local_val}'
+                            })
+                            self.total_checks += 1
+                            return False
+                    else:
+                        # Regular string comparison
+                        if str(jq_val) != str(local_val):
+                            logger.warning(f"{table_name} {stock_code} {date} row {idx} col '{col}': JQData={jq_val}, Local={local_val}")
+                            self.mismatches.append({
+                                'table': table_name,
+                                'code': stock_code,
+                                'date': date,
+                                'issue': f'Value mismatch in {col}: JQData={jq_val}, Local={local_val}'
+                            })
+                            self.total_checks += 1
+                            return False
 
         logger.debug(f"{table_name} {stock_code} {date}: MATCH ✓")
         self.passed_checks += 1
