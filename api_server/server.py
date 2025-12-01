@@ -923,6 +923,158 @@ class StockDataAPIServer:
                     'error': str(e)
                 }), 500
 
+        # 批量获取利润表数据
+        @self.app.route('/api/v1/stocks/batch/income_statement', methods=['POST'])
+        def get_batch_income_statement():
+            """批量获取股票利润表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 日期参数转换
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 调用批量获取方法
+                df = api.get_income_statement_batch(
+                    codes=codes,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取利润表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 批量获取现金流量表数据
+        @self.app.route('/api/v1/stocks/batch/cashflow_statement', methods=['POST'])
+        def get_batch_cashflow_statement():
+            """批量获取股票现金流量表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 日期参数转换
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 调用批量获取方法
+                df = api.get_cashflow_statement_batch(
+                    codes=codes,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取现金流量表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # 批量获取资产负债表数据
+        @self.app.route('/api/v1/stocks/batch/balance_sheet', methods=['POST'])
+        def get_batch_balance_sheet():
+            """批量获取股票资产负债表数据"""
+            try:
+                api = self._get_data_api()
+
+                # 获取请求参数
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': '请求参数不能为空'
+                    }), 400
+
+                codes = data.get('codes', [])
+                start_date = data.get('start_date')
+                end_date = data.get('end_date')
+
+                if not codes:
+                    return jsonify({
+                        'success': False,
+                        'error': '股票代码列表不能为空'
+                    }), 400
+
+                # 日期参数转换
+                if start_date:
+                    start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                if end_date:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+                # 调用批量获取方法
+                df = api.get_balance_sheet_batch(
+                    codes=codes,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': safe_json_convert(df) if not df.empty else [],
+                    'count': int(len(df))
+                })
+
+            except Exception as e:
+                logger.error(f"批量获取资产负债表数据失败: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
 
 
         # ==================== 用户交易记录相关API ====================
