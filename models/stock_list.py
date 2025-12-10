@@ -20,7 +20,8 @@ class StockInfo(BaseModel):
     # 市场信息
     exchange: Optional[str] = None  # 交易所代码 (XSHG/XSHE/BSE)
     market: Optional[str] = None  # 市场类型 (main/gem/star/bse)
-    
+    security_type: str = 'stock'  # 证券类型 ('stock' or 'index')
+
     # 行业分类（后续补充）
     industry_code: Optional[str] = None  # 行业代码
     industry_name: Optional[str] = None  # 行业名称
@@ -64,7 +65,17 @@ class StockInfo(BaseModel):
     def is_active(self) -> bool:
         """是否为活跃股票（未退市）"""
         return self.end_date is None and self.status == 'normal'
-    
+
+    @property
+    def is_index(self) -> bool:
+        """是否为指数"""
+        return self.security_type == 'index'
+
+    @property
+    def is_stock(self) -> bool:
+        """是否为股票"""
+        return self.security_type == 'stock'
+
     @property
     def exchange_name(self) -> str:
         """交易所名称"""

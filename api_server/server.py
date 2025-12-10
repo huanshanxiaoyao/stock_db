@@ -232,10 +232,16 @@ class StockDataAPIServer:
                     'error': str(e)
                 }), 500
         
-        # 价格数据
+        # 价格数据 (支持股票和指数)
         @self.app.route('/api/v1/stocks/<code>/price', methods=['GET'])
+        @self.app.route('/api/v1/securities/<code>/price', methods=['GET'])
         def get_price_data(code: str):
-            """获取股票价格数据"""
+            """获取价格数据 (支持股票和指数)
+
+            Examples:
+                /api/v1/stocks/600000.SH/price - 股票
+                /api/v1/securities/000300.SH/price - 指数
+            """
             try:
                 api = self._get_data_api()
                 
@@ -260,7 +266,7 @@ class StockDataAPIServer:
                 if data.empty:
                     return jsonify({
                         'success': False,
-                        'error': f'未找到股票 {code} 的价格数据'
+                        'error': f'未找到代码 {code} 的价格数据'
                     }), 404
                 
                 # 转换为JSON格式

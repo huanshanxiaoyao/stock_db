@@ -142,7 +142,8 @@ class JQDataSource(BaseDataSource):
             # 添加交易所和市场信息
             df_all['exchange'] = df_all['code'].apply(self._get_exchange_from_code)
             df_all['market'] = df_all['code'].apply(self._get_market_from_code)
-            
+            df_all['security_type'] = 'stock'  # 设置证券类型为股票
+
             # 重命名列以匹配StockInfo模型
             df_all.rename(columns={
                 'display_name': 'display_name',
@@ -161,7 +162,87 @@ class JQDataSource(BaseDataSource):
             
         except Exception as e:
             self._handle_api_error(e, "获取完整股票列表")
-    
+
+    def get_all_index_list(self) -> pd.DataFrame:
+        """获取完整的中国市场指数列表"""
+        if not self.is_authenticated():
+            raise RuntimeError("请先进行认证")
+
+        try:
+            # 获取所有指数
+            df_index = get_all_securities(types=['index'])
+
+            # 重置索引，将指数代码作为列
+            df_index = df_index.reset_index()
+            df_index.rename(columns={'index': 'code'}, inplace=True)
+
+            # 确保代码列为字符串类型
+            df_index['code'] = df_index['code'].astype(str)
+
+            # 转换为标准格式代码
+            df_index['code'] = df_index['code'].apply(self._from_jq_code)
+
+            # 添加交易所和市场信息
+            df_index['exchange'] = df_index['code'].apply(self._get_exchange_from_code)
+            df_index['market'] = None  # 指数不区分市场
+
+            # 设置证券类型为指数
+            df_index['security_type'] = 'index'
+
+            # 重命名列以匹配StockInfo模型
+            df_index.rename(columns={
+                'display_name': 'display_name',
+                'name': 'name',
+                'start_date': 'start_date',
+                'end_date': 'end_date'
+            }, inplace=True)
+
+            # JQData returns far-future dates (like 2200-01-01) for active indices
+            # Convert these to None for consistency
+            df_index['end_date'] = df_index['end_date'].apply(
+                lambda x: None if pd.notna(x) and x.year > 2100 else x
+            )
+
+            # 股票特有字段设置为None
+            df_index['industry_code'] = None
+            df_index['industry_name'] = None
+            df_index['sector_code'] = None
+            df_index['sector_name'] = None
+            df_index['is_st'] = False
+
+            # 添加状态信息
+            df_index['status'] = 'normal'
+            df_index['update_date'] = pd.Timestamp.now().date()
+
+            self.logger.info(f"获取到 {len(df_index)} 个指数信息")
+            return df_index
+
+        except Exception as e:
+            self._handle_api_error(e, "获取完整指数列表")
+
+    def get_index_price_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """获取指数价格数据（公开方法）
+
+        Args:
+            codes: 指数代码列表（标准格式，如 '000300.XSHG'）
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            包含指数价格数据的DataFrame
+
+        注意：指数数据不需要复权，内部使用fq=None
+        """
+        if not self.is_authenticated():
+            raise RuntimeError("请先进行认证")
+
+        self._validate_date_range(start_date, end_date)
+        self._validate_codes(codes)
+
+        self.logger.info(f"获取指数价格数据: {len(codes)} 个指数, 日期范围: {start_date} 到 {end_date}")
+        # 复用 _get_price_data，传入 fq=None 表示不复权（用于指数）
+        return self._get_price_data(codes, start_date, end_date, fq=None)
+
     def _get_exchange_from_code(self, code: str) -> str:
         """从股票代码获取交易所"""
         if code.endswith('.SH'):
@@ -580,16 +661,24 @@ class JQDataSource(BaseDataSource):
 
         return result
     
-    def _get_price_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """获取价格数据（分批请求聚宽API并合并结果）"""
-        self.logger.info(f"开始获取价格数据，股票数量: {len(codes)}，日期范围: {start_date} 到 {end_date}")
-        # 分批处理股票，避免单次请求过多
+    def _get_price_data(self, codes: List[str], start_date: date, end_date: date, fq: str = 'pre') -> pd.DataFrame:
+        """获取价格数据（分批请求聚宽API并合并结果）
+
+        Args:
+            codes: 股票/指数代码列表
+            start_date: 开始日期
+            end_date: 结束日期
+            fq: 复权类型 ('pre'=前复权用于股票, None=不复权用于指数)
+        """
+        security_type = "指数" if fq is None else "股票"
+        self.logger.info(f"开始获取{security_type}价格数据，数量: {len(codes)}，日期范围: {start_date} 到 {end_date}")
+        # 分批处理，避免单次请求过多
         batch_size = 400
         all_data = []
         for i in range(0, len(codes), batch_size):
             batch_codes = codes[i:i + batch_size]
-            self.logger.info(f"处理第 {i//batch_size + 1} 批，股票数量: {len(batch_codes)}")
-            batch_data = self._get_batch_price_data(batch_codes, start_date, end_date)
+            self.logger.info(f"处理第 {i//batch_size + 1} 批，数量: {len(batch_codes)}")
+            batch_data = self._get_batch_price_data(batch_codes, start_date, end_date, fq=fq)
             if not batch_data.empty:
                 all_data.append(batch_data)
             # 批次间休息，避免API限制
@@ -605,26 +694,32 @@ class JQDataSource(BaseDataSource):
             self.logger.warning("没有获取到任何价格数据")
             return pd.DataFrame()
     
-    def _get_batch_price_data(self, codes: List[str], start_date: date, end_date: date) -> pd.DataFrame:
-        """批量获取价格数据"""
+    def _get_batch_price_data(self, codes: List[str], start_date: date, end_date: date, fq: str = 'pre') -> pd.DataFrame:
+        """批量获取价格数据
+
+        Args:
+            codes: 股票/指数代码列表
+            start_date: 开始日期
+            end_date: 结束日期
+            fq: 复权类型 ('pre'=前复权用于股票, None=不复权用于指数)
+        """
         dfs = []
-        
+
         for idx, code in enumerate(codes):
             try:
                 jq_code = self._to_jq_code(code)
-                
-                # 使用get_price获取价格数据，包含复权因子等字段
-                # 使用fq='pre'获取前复权价格数据（中国市场标准）
-                # fq='pre': 返回前复权价格，最新日期factor=1.0，历史日期factor<1.0
-                # 计算原始价格：raw_price = adjusted_price / factor
+
+                # 使用get_price获取价格数据
+                # fq='pre': 股票使用前复权，最新日期factor=1.0，历史日期factor<1.0
+                # fq=None: 指数不需要复权
                 df = get_price(
                     jq_code,
                     start_date=start_date.strftime('%Y-%m-%d'),
                     end_date=end_date.strftime('%Y-%m-%d'),
                     frequency='daily',
-                    fields=['open', 'close', 'high', 'low', 'volume', 'money', 'pre_close', 'factor', 'high_limit', 'low_limit', 'avg', 'paused'],
+                    fields=['open', 'close', 'high', 'low', 'volume', 'money', 'pre_close', 'factor', 'high_limit', 'low_limit', 'avg', 'paused'] if fq else ['open', 'close', 'high', 'low', 'volume', 'money'],
                     skip_paused=False,
-                    fq='pre'
+                    fq=fq
                 )
                 
                 if not df.empty:
@@ -649,13 +744,13 @@ class JQDataSource(BaseDataSource):
                         df['adj_factor'] = 1.0
                     
                     # 确保所有字段都存在，如果缺失则填充默认值
-                    required_fields = ['high_limit', 'low_limit', 'avg', 'paused']
+                    required_fields = ['pre_close', 'high_limit', 'low_limit', 'avg', 'paused']
                     for field in required_fields:
                         if field not in df.columns:
                             if field == 'paused':
                                 df[field] = 0  # 默认未停牌
                             else:
-                                df[field] = None  # 其他字段默认为None
+                                df[field] = None  # 其他字段默认为None (指数可能没有这些字段)
                     
                     # 重新排列列顺序，确保与PriceData模型匹配
                     df = df[['code', 'day', 'open', 'close', 'high', 'low', 'pre_close', 'volume', 'money', 

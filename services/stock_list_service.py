@@ -90,7 +90,7 @@ class StockListService:
                 return False
             
             # 批量插入数据库
-            success = self.database.save_models(stock_models)
+            success = self.database.insert_batch(stock_models)
             
             if success:
                 self.logger.info(f"成功更新 {len(stock_models)} 只股票信息")
@@ -112,7 +112,7 @@ class StockListService:
         """
         try:
             # 检查表是否存在数据
-            result = self.database.query(
+            result = self.database.query_data(
                 "SELECT COUNT(*) as count FROM stock_list"
             )
             
@@ -120,7 +120,7 @@ class StockListService:
                 return True
             
             # 检查最后更新时间
-            result = self.database.query(
+            result = self.database.query_data(
                 "SELECT MAX(update_date) as last_update FROM stock_list"
             )
             
@@ -165,7 +165,7 @@ class StockListService:
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             sql = f"SELECT * FROM stock_list WHERE {where_clause} AND status = 'normal' AND end_date IS NULL ORDER BY code"
             
-            return self.database.query(sql, params)
+            return self.database.query_data(sql, params)
             
         except Exception as e:
             self.logger.error(f"获取活跃股票列表失败: {e}")
@@ -182,7 +182,7 @@ class StockListService:
         """
         try:
             sql = "SELECT * FROM stock_list WHERE code = ?"
-            result = self.database.query(sql, [code])
+            result = self.database.query_data(sql, [code])
             
             if result.empty:
                 return None
@@ -246,7 +246,7 @@ class StockListService:
                 limit             # limit
             ]
             
-            result = self.database.query(sql, params)
+            result = self.database.query_data(sql, params)
             return result
             
         except Exception as e:
@@ -271,7 +271,7 @@ class StockListService:
             ORDER BY exchange, market
             """
             
-            result = self.database.query(sql)
+            result = self.database.query_data(sql)
             
             stats = {}
             for _, row in result.iterrows():
@@ -325,3 +325,132 @@ class StockListService:
         except Exception as e:
             self.logger.error(f"更新股票行业信息失败 {code}: {e}")
             return False
+
+    # ========== 指数相关方法 ==========
+
+    def update_index_list(self, force_update: bool = False) -> bool:
+        """更新指数列表
+
+        Args:
+            force_update: 是否强制更新
+
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            self.logger.info("开始更新指数列表...")
+
+            # 从数据源获取最新指数列表
+            if hasattr(self.data_source, 'get_all_index_list'):
+                df_indices = self.data_source.get_all_index_list()
+            else:
+                self.logger.error("数据源不支持获取指数列表")
+                return False
+
+            if df_indices.empty:
+                self.logger.warning("未获取到指数列表数据")
+                return False
+
+            # 转换为StockInfo对象列表（复用StockInfo模型，security_type='index'）
+            index_models = []
+            for _, row in df_indices.iterrows():
+                try:
+                    # 处理日期字段
+                    start_date = row['start_date']
+                    if pd.isna(start_date):
+                        # Skip indices with no start_date
+                        continue
+                    if isinstance(start_date, str):
+                        start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    elif hasattr(start_date, 'date'):
+                        start_date = start_date.date()
+
+                    end_date = row.get('end_date')
+                    if pd.notna(end_date):
+                        if isinstance(end_date, str):
+                            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+                        elif hasattr(end_date, 'date'):
+                            end_date = end_date.date()
+                    else:
+                        end_date = None
+
+                    index_info = StockInfo(
+                        code=row['code'],
+                        display_name=row['display_name'],
+                        name=row['name'],
+                        start_date=start_date,
+                        end_date=end_date,
+                        exchange=row.get('exchange'),
+                        market=row.get('market'),
+                        security_type='index',  # 设置为指数
+                        status=row.get('status', 'normal'),
+                        is_st=False,  # 指数不会是ST
+                        update_date=date.today()
+                    )
+
+                    if index_info.validate():
+                        index_models.append(index_info)
+                    else:
+                        self.logger.warning(f"指数信息验证失败: {row['code']}")
+
+                except Exception as e:
+                    self.logger.error(f"处理指数信息失败 {row.get('code', 'unknown')}: {e}")
+                    continue
+
+            if not index_models:
+                self.logger.error("没有有效的指数信息")
+                return False
+
+            # 批量插入数据库
+            success = self.database.insert_batch(index_models)
+
+            if success:
+                self.logger.info(f"成功更新 {len(index_models)} 个指数信息")
+                return True
+            else:
+                self.logger.error("指数列表数据库更新失败")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"更新指数列表失败: {e}")
+            return False
+
+    def get_active_indices(self, exchange: Optional[str] = None) -> pd.DataFrame:
+        """获取活跃指数列表
+
+        Args:
+            exchange: 交易所过滤 (XSHG/XSHE)
+
+        Returns:
+            pd.DataFrame: 指数列表
+        """
+        try:
+            # 构建查询条件
+            conditions = ["security_type = 'index'", "status = 'normal'", "end_date IS NULL"]
+            params = []
+
+            if exchange:
+                conditions.append("exchange = ?")
+                params.append(exchange)
+
+            # 构建完整SQL
+            where_clause = " AND ".join(conditions)
+            sql = f"SELECT * FROM stock_list WHERE {where_clause} ORDER BY code"
+
+            return self.database.query_data(sql, params)
+
+        except Exception as e:
+            self.logger.error(f"获取活跃指数列表失败: {e}")
+            return pd.DataFrame()
+
+    def get_index_codes(self, exchange: Optional[str] = None) -> List[str]:
+        """获取指数代码列表
+
+        Args:
+            exchange: 交易所过滤 (XSHG/XSHE)
+
+        Returns:
+            List[str]: 指数代码列表
+        """
+        df = self.get_active_indices(exchange=exchange)
+        return df['code'].tolist() if not df.empty else []
