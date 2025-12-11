@@ -450,12 +450,78 @@ class UpdateService:
 
                     update_result['successful'].update(batch_result.get('successful', {}))
                     update_result['failed'].update(batch_result.get('failed', {}))
+
+                    # 如果是价格数据，也更新指数
+                    if data_type == 'price_data':
+                        self.logger.info(f"更新指数价格数据，目标日期: {target_date}")
+                        self._update_index_prices(target_date=target_date)
             else:
                 # 增量更新：正常的每日更新逻辑
                 update_result = self.update_multiple_stocks(target_stocks, update_types)
+
+                # 如果更新了价格数据，也更新指数价格
+                if 'price_data' in update_types:
+                    self.logger.info("增量更新指数价格数据")
+                    self._update_index_prices()
+
             results['update_result'] = update_result
 
         return results
+
+    def _update_index_prices(self, target_date=None):
+        """更新指数价格数据
+
+        Args:
+            target_date: 目标日期，如果为None则增量更新
+        """
+        try:
+            from services.stock_list_service import StockListService
+
+            # 获取股票列表服务
+            stock_list_service = StockListService(self.database, self.data_source)
+
+            # 获取所有活跃指数代码
+            index_codes = stock_list_service.get_index_codes()
+
+            if not index_codes:
+                self.logger.warning("未找到指数列表，跳过指数价格更新")
+                return
+
+            self.logger.info(f"准备更新 {len(index_codes)} 个指数的价格数据")
+
+            # 确定日期范围
+            from datetime import date, timedelta
+            if target_date:
+                # 指定日期更新
+                start_date = target_date
+                end_date = target_date
+            else:
+                # 增量更新：最近7天
+                end_date = date.today()
+                start_date = end_date - timedelta(days=7)
+
+            # 批量获取指数价格数据
+            if hasattr(self.data_source, 'get_index_price_data'):
+                df_price = self.data_source.get_index_price_data(
+                    codes=index_codes,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                if not df_price.empty:
+                    # 保存到数据库
+                    success = self.database.insert_dataframe(df_price, 'price_data')
+                    if success:
+                        self.logger.info(f"✓ 成功更新 {len(df_price)} 条指数价格记录")
+                    else:
+                        self.logger.error("✗ 保存指数价格数据失败")
+                else:
+                    self.logger.warning("未获取到指数价格数据")
+            else:
+                self.logger.warning("数据源不支持获取指数价格数据")
+
+        except Exception as e:
+            self.logger.error(f"更新指数价格数据失败: {e}")
 
     def _get_stocks_by_exchange(self, exchange: str) -> Optional[List[str]]:
         """根据交易所类型获取股票列表
