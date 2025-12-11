@@ -151,7 +151,19 @@ class DatabaseManager:
     def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """执行查询"""
         return self.db.query_data(sql, params)
-    
+
+    def query_data(self, sql: str, params: Optional[List[Any]] = None) -> pd.DataFrame:
+        """执行SQL查询（兼容性方法，支持列表参数）
+
+        Args:
+            sql: SQL查询语句
+            params: 查询参数列表
+
+        Returns:
+            pd.DataFrame: 查询结果
+        """
+        return self.db.query_data(sql, params)
+
     def get_latest_date(self, table_name: str, code: Optional[str] = None) -> Optional[date]:
         """获取最新数据日期"""
         return self.db.get_latest_date(table_name, code)
