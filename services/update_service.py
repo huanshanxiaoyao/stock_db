@@ -436,6 +436,9 @@ class UpdateService:
                 update_types.append(dt)
 
         if update_types:
+            # Separate stocks and indices handling
+            has_price_data = 'price_data' in update_types
+
             if target_date:
                 # 指定日期更新：只更新指定日期的数据
                 update_result = {'successful': {}, 'failed': {}}
@@ -451,77 +454,41 @@ class UpdateService:
                     update_result['successful'].update(batch_result.get('successful', {}))
                     update_result['failed'].update(batch_result.get('failed', {}))
 
-                    # 如果是价格数据，也更新指数
-                    if data_type == 'price_data':
-                        self.logger.info(f"更新指数价格数据，目标日期: {target_date}")
-                        self._update_index_prices(target_date=target_date)
+                # 如果包含价格数据，单独更新指数
+                if has_price_data:
+                    index_codes = self._get_index_codes()
+                    if index_codes:
+                        self.logger.info(f"更新 {len(index_codes)} 个指数的价格数据，目标日期: {target_date}")
+                        # 清除缓存，确保新获取的指数能被识别
+                        self._index_codes_cache = set(index_codes)
+                        index_result = self._update_multiple_stocks_batch(
+                            index_codes, ['price_data'],
+                            force_full_update=True, end_date=target_date)
+
+                        update_result['successful'].update(index_result.get('successful', {}))
+                        update_result['failed'].update(index_result.get('failed', {}))
             else:
                 # 增量更新：正常的每日更新逻辑
                 update_result = self.update_multiple_stocks(target_stocks, update_types)
 
-                # 如果更新了价格数据，也更新指数价格
-                if 'price_data' in update_types:
-                    self.logger.info("增量更新指数价格数据")
-                    self._update_index_prices()
+                # 如果包含价格数据，单独更新指数
+                if has_price_data:
+                    index_codes = self._get_index_codes()
+                    if index_codes:
+                        self.logger.info(f"增量更新 {len(index_codes)} 个指数的价格数据")
+                        # 清除缓存，确保新获取的指数能被识别
+                        self._index_codes_cache = set(index_codes)
+                        index_result = self.update_multiple_stocks(index_codes, ['price_data'])
+
+                        # 合并结果
+                        if 'successful' in index_result:
+                            update_result.setdefault('successful', []).extend(index_result['successful'])
+                        if 'failed' in index_result:
+                            update_result.setdefault('failed', []).extend(index_result['failed'])
 
             results['update_result'] = update_result
 
         return results
-
-    def _update_index_prices(self, target_date=None):
-        """更新指数价格数据
-
-        Args:
-            target_date: 目标日期，如果为None则增量更新
-        """
-        try:
-            from services.stock_list_service import StockListService
-
-            # 获取股票列表服务
-            stock_list_service = StockListService(self.database, self.data_source)
-
-            # 获取所有活跃指数代码
-            index_codes = stock_list_service.get_index_codes()
-
-            if not index_codes:
-                self.logger.warning("未找到指数列表，跳过指数价格更新")
-                return
-
-            self.logger.info(f"准备更新 {len(index_codes)} 个指数的价格数据")
-
-            # 确定日期范围
-            from datetime import date, timedelta
-            if target_date:
-                # 指定日期更新
-                start_date = target_date
-                end_date = target_date
-            else:
-                # 增量更新：最近7天
-                end_date = date.today()
-                start_date = end_date - timedelta(days=7)
-
-            # 批量获取指数价格数据
-            if hasattr(self.data_source, 'get_index_price_data'):
-                df_price = self.data_source.get_index_price_data(
-                    codes=index_codes,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-
-                if not df_price.empty:
-                    # 保存到数据库
-                    success = self.database.insert_dataframe(df_price, 'price_data')
-                    if success:
-                        self.logger.info(f"✓ 成功更新 {len(df_price)} 条指数价格记录")
-                    else:
-                        self.logger.error("✗ 保存指数价格数据失败")
-                else:
-                    self.logger.warning("未获取到指数价格数据")
-            else:
-                self.logger.warning("数据源不支持获取指数价格数据")
-
-        except Exception as e:
-            self.logger.error(f"更新指数价格数据失败: {e}")
 
     def _get_stocks_by_exchange(self, exchange: str) -> Optional[List[str]]:
         """根据交易所类型获取股票列表
@@ -831,18 +798,31 @@ class UpdateService:
                 self.logger.error("Tushare数据源未配置")
             return None
 
+        # Check if this is an index (only for PRICE_DATA)
+        is_index = False
+        if data_type == DataType.PRICE_DATA:
+            is_index = self._is_index_code(code)
+            if is_index:
+                self.logger.debug(f"{code} 识别为指数")
+
         # 仅尝试首选数据源
         preferred_source_name = self.data_sources.get_preferred_source_for_stock(code)
         if preferred_source_name and preferred_source_name in self.data_sources.sources:
             source = self.data_sources.sources[preferred_source_name]
-            if data_type == DataType.VALUATION_DATA:
+
+            # For price data, use appropriate method based on security type
+            if data_type == DataType.PRICE_DATA:
+                if is_index and hasattr(source, 'get_index_price_data'):
+                    self.logger.debug(f"使用 get_index_price_data 获取指数 {code} 的价格数据")
+                    result = source.get_index_price_data([code], start_date, end_date)
+                else:
+                    result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
+            elif data_type == DataType.VALUATION_DATA:
                 result = source.get_valuation_data([code], start_date, end_date)
             elif data_type == DataType.INDICATOR_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.INDICATOR_DATA)
             elif data_type == DataType.MTSS_DATA:
                 result = source.get_market_data([code], start_date, end_date, DataType.MTSS_DATA)
-            elif data_type == DataType.PRICE_DATA:
-                result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
             else:
                 result = None
 
@@ -876,8 +856,41 @@ class UpdateService:
             else:
                 self.logger.error(f" {source_name} 没有get_all_stock_list")
             
-            return []  
-            
+            return []
+
+    def _get_index_codes(self) -> List[str]:
+        """Get all active index codes from database
+
+        Returns:
+            List of index codes
+        """
+        try:
+            sql = """
+                SELECT code FROM stock_list
+                WHERE security_type = 'index'
+                AND (end_date IS NULL OR end_date > CURRENT_DATE)
+                ORDER BY code
+            """
+            result = self.db.query(sql)
+            if not result.empty:
+                codes = result['code'].tolist()
+                self.logger.info(f"从数据库获取指数代码，共 {len(codes)} 个")
+                return codes
+        except Exception as e:
+            self.logger.error(f"获取指数代码失败: {e}")
+
+        return []
+
+    def _is_index_code(self, code: str) -> bool:
+        """Check if a code is an index by querying stock_list table
+
+        Uses a simple cache to avoid repeated queries
+        """
+        if not hasattr(self, '_index_codes_cache'):
+            self._index_codes_cache = set(self._get_index_codes())
+
+        return code in self._index_codes_cache
+
     def _should_update_financial_data(self) -> bool:
         """判断是否需要更新财务数据"""
         try:
