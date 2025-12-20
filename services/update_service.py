@@ -535,7 +535,7 @@ class UpdateService:
     # ==================== 私有辅助方法 ====================
     
     def _get_stock_info(self, code: str) -> Optional[Dict[str, Any]]:
-        """获取股票基本信息"""
+        """获取股票/指数基本信息"""
         # 固定从jq数据源获取股票信息
         jq_source = self.data_sources.sources.get('jqdata')
         if not jq_source or not hasattr(jq_source, 'get_all_stock_list'):
@@ -548,7 +548,7 @@ class UpdateService:
                 'display_name': code
             }
 
-        # 优先使用缓存
+        # 优先使用缓存查找股票
         stock_list = None
 
         if isinstance(getattr(self, '_cached_stock_list', None), pd.DataFrame) and not self._cached_stock_list.empty:
@@ -583,7 +583,35 @@ class UpdateService:
                 info.setdefault('code', code)
 
                 return info
- 
+
+        # 如果在股票列表中没找到，检查是否是指数
+        if self._is_index_code(code):
+            self.logger.debug(f"{code} 在股票列表中未找到，尝试从数据库获取指数信息")
+            try:
+                result = self.db.query(
+                    "SELECT * FROM stock_list WHERE code = ? AND security_type = 'index' LIMIT 1",
+                    [code]
+                )
+                if not result.empty:
+                    info = result.iloc[0].to_dict()
+                    today = date.today()
+
+                    # 处理日期字段
+                    start_d = to_date(info.get('start_date')) or self.default_history_start_date
+                    end_d = to_date(info.get('end_date'))
+                    if end_d is None or end_d > today:
+                        end_d = today
+
+                    return {
+                        'code': code,
+                        'start_date': start_d,
+                        'end_date': end_d,
+                        'name': info.get('name', code),
+                        'display_name': info.get('display_name', code)
+                    }
+            except Exception as e:
+                self.logger.error(f"从数据库获取指数信息失败: {e}")
+
         return None
     
     def _update_financial_data(self, code: str, stock_info: Dict[str, Any], 
@@ -810,24 +838,37 @@ class UpdateService:
         if preferred_source_name and preferred_source_name in self.data_sources.sources:
             source = self.data_sources.sources[preferred_source_name]
 
-            # For price data, use appropriate method based on security type
-            if data_type == DataType.PRICE_DATA:
-                if is_index and hasattr(source, 'get_index_price_data'):
-                    self.logger.debug(f"使用 get_index_price_data 获取指数 {code} 的价格数据")
-                    result = source.get_index_price_data([code], start_date, end_date)
-                else:
-                    result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
-            elif data_type == DataType.VALUATION_DATA:
-                result = source.get_valuation_data([code], start_date, end_date)
-            elif data_type == DataType.INDICATOR_DATA:
-                result = source.get_market_data([code], start_date, end_date, DataType.INDICATOR_DATA)
-            elif data_type == DataType.MTSS_DATA:
-                result = source.get_market_data([code], start_date, end_date, DataType.MTSS_DATA)
-            else:
-                result = None
+            # Check if source is authenticated (skip if not)
+            if not source.is_authenticated():
+                self.logger.warning(f"{preferred_source_name} 数据源未认证，跳过 {code}")
+                return None
 
-            if result is not None and not result.empty:
-                return result
+            try:
+                # For price data, use appropriate method based on security type
+                if data_type == DataType.PRICE_DATA:
+                    if is_index and hasattr(source, 'get_index_price_data'):
+                        self.logger.debug(f"使用 get_index_price_data 获取指数 {code} 的价格数据")
+                        result = source.get_index_price_data([code], start_date, end_date)
+                    else:
+                        result = source.get_market_data([code], start_date, end_date, DataType.PRICE_DATA)
+                elif data_type == DataType.VALUATION_DATA:
+                    result = source.get_valuation_data([code], start_date, end_date)
+                elif data_type == DataType.INDICATOR_DATA:
+                    result = source.get_market_data([code], start_date, end_date, DataType.INDICATOR_DATA)
+                elif data_type == DataType.MTSS_DATA:
+                    result = source.get_market_data([code], start_date, end_date, DataType.MTSS_DATA)
+                else:
+                    result = None
+
+                if result is not None and not result.empty:
+                    return result
+            except RuntimeError as e:
+                # Handle authentication errors gracefully
+                if "未认证" in str(e) or "not authenticated" in str(e).lower():
+                    self.logger.warning(f"{preferred_source_name} 认证失败，跳过 {code}: {e}")
+                    return None
+                else:
+                    raise
 
             return None
     
